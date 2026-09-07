@@ -1,3 +1,6 @@
+/// <reference lib="dom" />
+/// <reference types="node" />
+
 /**
  * Lightweight server-side Supabase helper that uses raw fetch calls instead of
  * @supabase/supabase-js. The JS SDK initialises a WebSocket realtime client in

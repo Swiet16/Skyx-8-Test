@@ -1,3 +1,6 @@
+/// <reference lib="dom" />
+/// <reference types="node" />
+
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireRole } from "./_lib/auth";
 import { fetchParcel } from "./_lib/supabase-server";

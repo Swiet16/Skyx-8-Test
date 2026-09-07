@@ -1,3 +1,6 @@
+/// <reference lib="dom" />
+/// <reference types="node" />
+
 import { getUser, getUserRole } from "./supabase-server";
 
 export type AllowedRole = "admin" | "staff" | "developer";
