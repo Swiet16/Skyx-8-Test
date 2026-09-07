@@ -418,13 +418,31 @@ export function ShippingLabel({ parcel, open, onClose, countryMap = {} }: Shippi
       tmp.splitTextToSize(ln, addrMaxW));
 
     const LINE_H = 3.6;
+    // FIX (name/phone overflow): the 9.5pt sender/receiver names were drawn
+    // as ONE unwrapped line and could run underneath the contact panel
+    // (FROM) or the vertical divider (TO); long phone numbers overflowed the
+    // narrow 22/34mm contact columns onto the label border. Pre-wrap the
+    // main names (max 2 lines) and grow the section heights accordingly.
+    const NAME_LINE_H = 4.6;
+    tmp.setFont("helvetica", "bold"); tmp.setFontSize(9.5);
+    const sndNameMain: string[] = String(parcel.sender_name || "").trim()
+      ? (tmp.splitTextToSize(String(parcel.sender_name), W - ORIGIN_W - pad - 3) as string[]).slice(0, 2)
+      : [];
+    const rcvNameMain: string[] = String(parcel.receiver_name || "").trim()
+      ? (tmp.splitTextToSize(String(parcel.receiver_name), addrMaxW) as string[]).slice(0, 2)
+      : [];
+    tmp.setFont("helvetica", "normal"); tmp.setFontSize(PRE_WRAP_FONT); // restore for the re-wrap below
+    const fromNameExtra = Math.max(0, sndNameMain.length - 1) * NAME_LINE_H;
+    const toNameExtra   = Math.max(0, rcvNameMain.length - 1) * NAME_LINE_H;
     const fromBodyH = Math.max(0, (sndWrapped.slice(0, 6).length) * LINE_H);
     const toBodyH   = Math.max(0, (rcvWrapped.slice(0, 7).length) * LINE_H);
 
     // hdrH bumped from 25 -> 29 to make room for the website line under the date
     const hdrH  = 29;
-    const fromH = Math.max(24, 13 + fromBodyH + 3);
-    const toH   = Math.max(28, 13 + toBodyH   + 3);
+    // Minimums raised 24 -> 27 / 28 -> 30 so the contact column can hold up
+    // to 3 wrapped name lines + 2 wrapped phone lines without overflowing.
+    const fromH = Math.max(27, 13 + fromNameExtra + fromBodyH + 4);
+    const toH   = Math.max(30, 13 + toNameExtra   + toBodyH   + 4);
     const barH  = 8;
     const refH  = 11;
     const wH    = 15;
@@ -519,10 +537,32 @@ export function ShippingLabel({ parcel, open, onClose, countryMap = {} }: Shippi
     // (angle = 90 in jsPDF) so glyphs read correctly when viewing the
     // rotated label.
     const txt = (s: string | string[], x: number, y: number, opts?: any) => {
+      // FIX (overlapping centered text): jsPDF implements align:"center" by
+      // shifting the PAGE-X coordinate (x -= lineWidth / 2) BEFORE the 90°
+      // rotation is applied. On this rotated label that shift lands on the
+      // axis PERPENDICULAR to the text baseline, so every centered string
+      // floated UP by half its own text width — barcode captions rose into
+      // the barcode images above them, Day/Time values rose into their
+      // captions, weight values rose into the caption row, and the DOX/
+      // NON-DOX badge drifted inside its black box. The wider the string,
+      // the bigger the overlap.
+      //
+      // Fix: center OURSELVES along the design-X axis (the baseline
+      // direction) and always let jsPDF draw left-aligned, so its broken
+      // align+angle interaction is never triggered.
+      const newOpts = { ...(opts || {}) };
+      const align = newOpts.align;
+      delete newOpts.align; // never let jsPDF center rotated text
+      let drawX = x;
+      if (align === "center" && typeof s === "string" && s.length > 0) {
+        // getTextWidth() returns the width at the CURRENT (already scaled)
+        // font size in page-mm — divide by the scale to get design-mm.
+        const wDesign = doc.getTextWidth(s) / _scale;
+        drawX = x - wDesign / 2;
+      }
       const pageX = pdfPx(y);
-      const pageY = pdfPy(x);
-      const newOpts = { ...(opts || {}), angle: 90 };
-      return _origText(s as any, pageX, pageY, newOpts);
+      const pageY = pdfPy(drawX);
+      return _origText(s as any, pageX, pageY, { ...newOpts, angle: 90 });
     };
     const sf = (style: string, size: number, r = 0, g = 0, b = 0) => {
       // Font size is scaled so text stays proportional with the drawing.
@@ -663,10 +703,12 @@ export function ShippingLabel({ parcel, open, onClose, countryMap = {} }: Shippi
     sf("bold", 7, 60, 60, 60);
     txt("FROM:", pad, y + 5);
     sf("bold", 9.5, 0, 0, 0);
-    txt(parcel.sender_name, pad, y + 10.5);
+    // wrapped main name (max 2 lines) — same first baseline, stacks down
+    let ny = y + 10.5;
+    for (const ln of sndNameMain) { txt(ln, pad, ny); ny += NAME_LINE_H; }
 
     sf("normal", 7.5, 30, 30, 30);
-    let fy = y + 15;
+    let fy = y + 15 + fromNameExtra;
     for (const ln of sndWrapped.slice(0, 6)) { txt(ln, pad, fy); fy += LINE_H; }
 
     sf("normal", 6.5, 90, 90, 90);
@@ -674,11 +716,15 @@ export function ShippingLabel({ parcel, open, onClose, countryMap = {} }: Shippi
     sf("bold", 8, 0, 0, 0);
     // Wrap at the SCALED width (in real page mm) so wrapped lines fit
     // the rendered box; then draw at the transformed anchor.
-    const sndNameLines = doc.splitTextToSize(parcel.sender_name, (ORIGIN_W - 2) * _scale);
+    const sndNameLines = doc.splitTextToSize(parcel.sender_name, (ORIGIN_W - 2) * _scale).slice(0, 3);
     txt(sndNameLines, W - ORIGIN_W + 1, y + 10);
     if (parcel.sender_phone) {
       sf("normal", 8, 30, 30, 30);
-      txt(parcel.sender_phone, W - ORIGIN_W + 1, y + 10 + sndNameLines.length * LINE_H + 1);
+      // FIX: wrap the phone (max 2 lines) so long numbers stay inside the
+      // 22mm origin column instead of running over the label border.
+      const sndPhoneLines = doc.splitTextToSize(String(parcel.sender_phone), (ORIGIN_W - 2) * _scale).slice(0, 2);
+      let sy = y + 10 + sndNameLines.length * LINE_H + 1;
+      for (const ln of sndPhoneLines) { txt(ln, W - ORIGIN_W + 1, sy); sy += LINE_H; }
     }
 
     hline(y + fromH, 0.3, 160, 160, 160);
@@ -693,10 +739,12 @@ export function ShippingLabel({ parcel, open, onClose, countryMap = {} }: Shippi
     sf("bold", 7, 60, 60, 60);
     txt("TO:", pad, y + 5);
     sf("bold", 9.5, 0, 0, 0);
-    txt(parcel.receiver_name, pad, y + 10.5);
+    // wrapped main name (max 2 lines)
+    let ry = y + 10.5;
+    for (const ln of rcvNameMain) { txt(ln, pad, ry); ry += NAME_LINE_H; }
 
     sf("normal", 7.5, 30, 30, 30);
-    let ty = y + 15;
+    let ty = y + 15 + toNameExtra;
     for (const ln of rcvWrapped.slice(0, 7)) { txt(ln, pad, ty); ty += LINE_H; }
 
     // vertical divider between address and contact
@@ -707,11 +755,14 @@ export function ShippingLabel({ parcel, open, onClose, countryMap = {} }: Shippi
     txt("Contact:", cxLeft + 1, y + 5);
     sf("bold", 8, 0, 0, 0);
     // wrap contact name if too long
-    const cNameLines = doc.splitTextToSize(parcel.receiver_name, (CONTACT_W - 2) * _scale);
+    const cNameLines = doc.splitTextToSize(parcel.receiver_name, (CONTACT_W - 2) * _scale).slice(0, 3);
     txt(cNameLines, cxLeft + 1, y + 10.5);
     if (parcel.receiver_phone) {
       sf("normal", 8, 30, 30, 30);
-      txt(parcel.receiver_phone, cxLeft + 1, y + 10.5 + cNameLines.length * LINE_H + 1);
+      // FIX: wrap the phone (max 2 lines) so it stays inside the 34mm column.
+      const rcvPhoneLines = doc.splitTextToSize(String(parcel.receiver_phone), (CONTACT_W - 2) * _scale).slice(0, 2);
+      let py2 = y + 10.5 + cNameLines.length * LINE_H + 1;
+      for (const ln of rcvPhoneLines) { txt(ln, cxLeft + 1, py2); py2 += LINE_H; }
     }
 
     hline(y + toH, 0.5);
