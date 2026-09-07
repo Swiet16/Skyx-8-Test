@@ -44,6 +44,65 @@ import { exportManifestToExcel } from "@/utils/manifestExport";
 import { generateBulkManifestPDF } from "@/utils/bulkManifestPDF";
 import { supabase } from "@/integrations/supabase/client";
 
+// ── Resilient parcel row update (manifest → parcels status sync) ─────────────
+// ROOT CAUSE of "manifest status changes never reach the parcels": the sync
+// writes optional columns (admin_note, status_notes, current_location,
+// last_location, detailed_status) that many production databases do not have
+// yet. PostgREST rejects the WHOLE update with PGRST204 ("Could not find the
+// 'x' column of 'parcels' in the schema cache"), so `current_status` never
+// landed and parcels kept showing "processing".
+//
+// Fix: try the full patch first. If the database is missing one of the
+// optional columns, retry with the CORE patch (current_status + updated_at +
+// status_timeline — present on every schema) so the status itself ALWAYS
+// syncs. The caller is told a fallback happened so it can advise running
+// `supabase-parcels-status-sync.sql` to unlock comment/location mirroring.
+const PARCEL_CORE_PATCH_KEYS = ["current_status", "updated_at", "status_timeline"];
+
+function isSchemaColumnError(error: { code?: string | number; message?: string } | null | undefined): boolean {
+  if (!error) return false;
+  const code = String(error.code ?? "");
+  const msg = (error.message ?? "").toLowerCase();
+  return (
+    code === "PGRST204" ||
+    code === "42703" ||
+    msg.includes("could not find the") ||
+    (msg.includes("column") && msg.includes("does not exist")) ||
+    msg.includes("schema cache")
+  );
+}
+
+async function updateParcelRowResilient(
+  rowId: string,
+  patch: Record<string, any>
+): Promise<{ ok: boolean; error?: string; schemaFallback: boolean }> {
+  const { error } = await supabase.from("parcels").update(patch).eq("id", rowId);
+  if (!error) return { ok: true, schemaFallback: false };
+
+  // Non-schema errors (RLS denial, network, etc.) are reported as-is — the
+  // toast will surface them and the admin can fix permissions.
+  if (!isSchemaColumnError(error)) {
+    return { ok: false, error: error.message || "Unknown parcels update error", schemaFallback: false };
+  }
+
+  console.warn(
+    `[ManifestStock] parcels table is missing optional sync columns — retrying with core columns only. ` +
+    `Run supabase-parcels-status-sync.sql in the Supabase SQL Editor to enable comment/location mirroring. ` +
+    `Original error: ${error.message}`
+  );
+
+  const core: Record<string, any> = {};
+  PARCEL_CORE_PATCH_KEYS.forEach((k) => {
+    if (k in patch) core[k] = patch[k];
+  });
+  const { error: coreErr } = await supabase.from("parcels").update(core).eq("id", rowId);
+  if (coreErr) {
+    return { ok: false, error: coreErr.message || "Core status sync failed", schemaFallback: true };
+  }
+  return { ok: true, schemaFallback: true };
+}
+
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 const ORIGIN_HUBS = [
   "GRT - GUJRAT", "LHE - LAHORE", "KHI - KARACHI", "ISB - ISLAMABAD",
@@ -1162,6 +1221,7 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
     // caller can show an accurate result instead of a false-positive toast.
     const syncErrors: { trackingId: string; message: string }[] = [];
     const missingTrackingIds: string[] = [];
+    let schemaFallback = false;
 
     if (hasParcels) {
       const trackingIds = updatedParcels.map((p) => p.tracking_id).filter(Boolean);
@@ -1186,7 +1246,7 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
 
             const newEvent = { status, timestamp: nowIso, location, notes: comment || "" };
             await Promise.all(
-              rows.map((r: any) => {
+              rows.map(async (r: any) => {
                 const existing = Array.isArray(r.status_timeline) ? r.status_timeline : [];
                 // Build the update payload. Always set current_status, updated_at,
                 // and append the timeline event. Conditionally also push the
@@ -1230,19 +1290,20 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
                   patch.detailed_status = existingDetailed;
                 }
 
-                return supabase
-                  .from("parcels")
-                  .update(patch)
-                  .eq("id", r.id)
-                  .then(({ error }) => {
-                    if (error) {
-                      console.warn(
-                        `[ManifestStock] failed to sync parcel ${r.tracking_id}:`,
-                        error.message
-                      );
-                      syncErrors.push({ trackingId: r.tracking_id, message: error.message });
-                    }
-                  });
+                // Resilient write: on a missing-column schema error this
+                // retries with current_status/updated_at/status_timeline only,
+                // so the parcel status ALWAYS syncs even if the database has
+                // not been migrated yet (see supabase-parcels-status-sync.sql).
+                const result = await updateParcelRowResilient(r.id, patch);
+                if (!result.ok) {
+                  console.warn(
+                    `[ManifestStock] failed to sync parcel ${r.tracking_id}:`,
+                    result.error
+                  );
+                  syncErrors.push({ trackingId: r.tracking_id, message: result.error || "unknown error" });
+                } else if (result.schemaFallback) {
+                  schemaFallback = true;
+                }
               })
             );
           }
@@ -1253,7 +1314,7 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
       }
     }
 
-    return { updatedParcels, syncErrors, missingTrackingIds };
+    return { updatedParcels, syncErrors, missingTrackingIds, schemaFallback };
   };
 
   // ── Sync the manifest's "Tracking Events" tab down to the parcels table.
@@ -1300,7 +1361,7 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
       if (!rows || rows.length === 0) return;
 
       await Promise.all(
-        rows.map((r: any) => {
+        rows.map(async (r: any) => {
           const incoming = byAwb[r.tracking_id] || [];
           if (incoming.length === 0) return null;
 
@@ -1395,7 +1456,22 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
             }
           }
 
-          return supabase.from("parcels").update(update).eq("id", r.id);
+          // Resilient write (same fallback as cascadeStatusToParcels): if the
+          // database is missing the optional note/location columns, retry with
+          // status_timeline/current_status/updated_at only so tracking events
+          // still land on the public tracking page.
+          const result = await updateParcelRowResilient(r.id, update);
+          if (!result.ok) {
+            console.warn(
+              `[ManifestStock] failed to sync tracking events to parcel ${r.tracking_id}:`,
+              result.error
+            );
+          } else if (result.schemaFallback) {
+            console.warn(
+              `[ManifestStock] tracking-event note/location columns missing for ${r.tracking_id} — ` +
+              `event synced to timeline without note mirroring. Run supabase-parcels-status-sync.sql.`
+            );
+          }
         })
       );
     } catch (err) {
@@ -1416,6 +1492,7 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
     const count = selectedIds.size;
     const failedCount = results.reduce((s, r) => s + r.syncErrors.length, 0);
     const missingCount = results.reduce((s, r) => s + r.missingTrackingIds.length, 0);
+    const schemaFallbackCount = results.reduce((s, r) => s + (r.schemaFallback ? 1 : 0), 0);
     setSelectedIds(new Set());
     setShowBulkDialog(false);
     if (failedCount > 0 || missingCount > 0) {
@@ -1423,6 +1500,13 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
         title: "Status updated, but tracking sync had issues",
         description: `${count} manifest(s) → ${label}. ${failedCount} parcel(s) failed to sync (see console)${missingCount ? `, ${missingCount} not found in parcels table` : ""}.`,
         variant: "destructive",
+      });
+    } else if (schemaFallbackCount > 0) {
+      // Status DID sync for these manifests, but the database is missing the
+      // optional note/location columns so comments weren't mirrored.
+      toast({
+        title: `Status updated ✓ (${count} manifest(s) → ${label})`,
+        description: "Parcel statuses synced. Note: your database is missing optional columns (admin_note, current_location, …) so comments/locations weren't mirrored — run supabase-parcels-status-sync.sql in the Supabase SQL Editor to enable full sync.",
       });
     } else {
       toast({ title: `Status updated ✓`, description: `${count} manifest(s) → ${label}${bulkComment ? " · comment added" : ""} (parcels synced)` });
@@ -1434,7 +1518,7 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
   const handleSingleStatus = async (manifestId: string, status: string, comment?: string) => {
     const entry = entries.find((e) => e.manifestId === manifestId);
     const sourceParcels = editing?.manifestId === manifestId ? editing.parcels : entry?.parcels || [];
-    const { updatedParcels, syncErrors, missingTrackingIds } = await cascadeStatusToParcels(
+    const { updatedParcels, syncErrors, missingTrackingIds, schemaFallback } = await cascadeStatusToParcels(
       manifestId,
       status,
       sourceParcels,
@@ -1450,6 +1534,13 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
         title: "Status updated, but tracking sync failed",
         description: `${manifestId} → ${label} saved to the manifest, but ${syncErrors.length} parcel(s) did not sync to public tracking${missingTrackingIds.length ? ` (${missingTrackingIds.length} tracking ID not found)` : ""}. Check console for details.`,
         variant: "destructive",
+      });
+    } else if (schemaFallback) {
+      // The status DID reach the parcels table via the core-column fallback —
+      // only the optional comment/location mirroring was skipped.
+      toast({
+        title: "Status updated ✓ (parcels synced)",
+        description: `${manifestId} → ${label}. Note: your database is missing optional columns (admin_note, current_location, …) so the comment/location weren't mirrored — run supabase-parcels-status-sync.sql in the Supabase SQL Editor to enable full sync.`,
       });
     } else {
       toast({ title: "Status updated ✓", description: `${manifestId} → ${label}${comment ? " · comment added" : ""} (parcels synced)` });
