@@ -195,9 +195,12 @@ export async function generateBulkManifestPDF(
   // ═══════════════════════════════════════════════════════════════════════════
 
   // Column definitions: [label, x-offset from ML, width]
+  // FIX: first ID column was labelled "HAWB / REF" and filled with
+  // `reference_id || tracking_id`, so it always displayed the reference id.
+  // The user wants the TRACKING ID shown here — relabelled and re-ordered.
   const cols: [string, number, number][] = [
     ["#",          0,    6],
-    ["HAWB / REF", 7,   25],
+    ["TRACKING ID", 7,   25],
     ["SHIPPER",    33,  32],
     ["CONSIGNEE",  66,  32],
     ["FROM",       99,  22],
@@ -245,7 +248,9 @@ export async function generateBulkManifestPDF(
 
     pdf.setFont("helvetica", "normal"); pdf.setFontSize(6.8);
     row(String(i + 1),                                   0,   5);
-    row(p.reference_id || p.tracking_id || "",           7,   24);
+    // FIX: show the TRACKING ID first (was `reference_id || tracking_id`, which
+    // always printed the reference id in the tracking column).
+    row(p.tracking_id || p.reference_id || "",           7,   24);
     row(p.sender_name || "",                              33,  31);
     row(p.receiver_name || "",                            66,  31);
     row(country(p.from_country, countryMap),              99,  21);

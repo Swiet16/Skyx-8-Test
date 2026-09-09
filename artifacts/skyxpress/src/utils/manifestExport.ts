@@ -113,7 +113,14 @@ export function exportManifestToExcel(
     Number(parcel.weight ?? 0),
     Number(parcel.total_price ?? 0),
     getDescription(parcel),
-    parcel.reference_id || parcel.tracking_id || "",
+    // FIX: the TRACKING I'D column must show the parcel's TRACKING ID (the
+    // SkyXpress tracking number) — NOT the reference_id. Previously this cell
+    // was `reference_id || tracking_id`, so as long as a reference existed the
+    // column always displayed the reference id, which is exactly the bug the
+    // user reported ("tracking id section has the reference id written in it").
+    // Tracking id is now primary; reference id is only a last-resort fallback
+    // for the rare parcel that somehow has no tracking id at all.
+    parcel.tracking_id || parcel.reference_id || "",
     parcel.service_type || "",
     "LABEL PASTED",
   ]);

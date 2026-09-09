@@ -158,7 +158,9 @@ export async function generateManifestExcel(
       p.weight ?? 0, // Wt KGS
       p.total_price ?? 0, // VALUE $
       description, // Description
-      p.reference_id || p.tracking_id, // TRACKING I'D
+      // FIX: TRACKING I'D must show the tracking id (was `reference_id ||
+      // tracking_id`, which always displayed the reference id here).
+      p.tracking_id || p.reference_id, // TRACKING I'D
       p.service_type || "", // SERVICE
       "", // LABEL (checked off manually)
     ];
