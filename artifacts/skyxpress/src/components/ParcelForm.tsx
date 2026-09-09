@@ -20,6 +20,10 @@ import {
 interface ParcelFormProps {
   onSuccess: () => void;
   parcel?: any;
+  /** ROLE GATE: when true (partner / restricted role editing an existing
+   * parcel) the Reference ID and Tracking ID become read-only and are
+   * excluded from the update payload, so they can never be changed. */
+  lockIdentifiers?: boolean;
 }
 interface Country { code: string; name: string; continent?: string; }
 interface FormData {
@@ -505,8 +509,12 @@ const TypePicker = ({ value, onChange }: { value: string; onChange: (v: string) 
 );
 
 // ─── Main Form ────────────────────────────────────────────────────────────────
-export const ParcelForm = ({ onSuccess, parcel }: ParcelFormProps) => {
+export const ParcelForm = ({ onSuccess, parcel, lockIdentifiers = false }: ParcelFormProps) => {
   const isEdit = !!parcel;
+  // Identifiers (Reference / Tracking IDs) are locked when a restricted role
+  // (e.g. partner) edits an existing parcel. Creating a new parcel is still
+  // allowed — IDs are auto-generated there anyway.
+  const idsLocked = lockIdentifiers && isEdit;
   const { toast } = useToast();
   const [step, setStep] = useState(0);
   const [countries, setCountries] = useState<Country[]>([]);
@@ -745,6 +753,12 @@ export const ParcelForm = ({ onSuccess, parcel }: ParcelFormProps) => {
 
       if (isEdit) {
         delete payload.created_by;
+        // ROLE GATE: partners cannot change Reference / Tracking IDs —
+        // exclude them from the update so the DB keeps the original values.
+        if (lockIdentifiers) {
+          delete payload.reference_id;
+          delete payload.tracking_id;
+        }
         const { error } = await supabase.from("parcels").update(payload).eq("id", parcel.id);
         if (error) throw error;
         toast({ title: "Parcel updated ✓" });
@@ -770,29 +784,32 @@ export const ParcelForm = ({ onSuccess, parcel }: ParcelFormProps) => {
   // ─── Step content renderers ─────────────────────────────────────────────────
   const renderStep0 = () => (
     <SectionCard title="Shipment Details" icon={Hash} color="#C98A2B">
-      <Field label="Tracking ID" required>
+      <Field label="Tracking ID" required hint={idsLocked ? "Locked — your role cannot change this" : undefined}>
         <div className="relative">
           <StyledInput
             value={formData.tracking_id}
             onChange={(e: any) => set("tracking_id", e.target.value)}
             placeholder={trackingIdLoading ? "Generating…" : "Auto-generated"}
-            className="font-mono"
+            className={`font-mono ${idsLocked ? "opacity-70 cursor-not-allowed select-none" : ""}`}
+            readOnly={idsLocked}
           />
           {trackingIdLoading && (
             <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-white/30" />
           )}
         </div>
       </Field>
-      <Field label="Reference ID" hint="Locked in only when you save">
+      <Field label="Reference ID" hint={idsLocked ? "Locked — your role cannot change this" : "Locked in only when you save"}>
         <div className="relative">
           <StyledInput
             value={formData.reference_id}
             onChange={(e: any) => {
+              if (idsLocked) return; // ROLE GATE: ignore edits for restricted roles
               referenceIdTouched.current = true;
               set("reference_id", e.target.value);
             }}
             placeholder={referenceIdLoading ? "Generating…" : "Auto-generated"}
-            className="font-mono"
+            className={`font-mono ${idsLocked ? "opacity-70 cursor-not-allowed select-none" : ""}`}
+            readOnly={idsLocked}
           />
           {referenceIdLoading && (
             <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-white/30" />

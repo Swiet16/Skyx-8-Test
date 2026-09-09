@@ -205,6 +205,11 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
   }, [ipVisible]);
 
   const handleSendXrayEmail = async (parcel: Parcel) => {
+    // ROLE GATE: partners / restricted roles cannot send parcel emails.
+    if (!canEmailParcel) {
+      toast({ title: "Not allowed", description: "Your role cannot send parcel emails.", variant: "destructive" });
+      return;
+    }
     if (!parcel.receiver_email) {
       toast({ title: "No receiver email", description: "This parcel has no receiver email on record.", variant: "destructive" });
       return;
@@ -258,12 +263,34 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
   // ── Current auth user (for stamping manifests) ─────────────────────────
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  // ── ROLE-BASED PERMISSIONS (enforced by logged-in role) ────────────────────
+  //   admin  : full access — view / edit / email / delete
+  //   staff  : view / edit / email — CANNOT delete parcels
+  //   partner: view + create only — NO edit / delete / email buttons, and
+  //            Reference ID + Tracking ID are NOT editable
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(async ({ data }) => {
       const u = data?.session?.user;
-      if (u) { setCurrentUserId(u.id); setCurrentUserEmail(u.email ?? null); }
+      if (u) {
+        setCurrentUserId(u.id); setCurrentUserEmail(u.email ?? null);
+        const { data: prof } = await supabase.from("profiles").select("role").eq("user_id", u.id).single();
+        setCurrentUserRole(prof?.role ?? null);
+      }
     });
   }, []);
+
+  const isAdminUser = currentUserRole === "admin";
+  // Partner (and any other non-privileged role) gets the restricted view.
+  // While the role is still loading (null) we keep the neutral staff-level
+  // view so admins don't see a flicker — every action handler re-checks.
+  const isRestrictedUser =
+    isPartnerView ||
+    currentUserRole === "partner" ||
+    (!!currentUserRole && currentUserRole !== "admin" && currentUserRole !== "staff");
+  const canEditParcel = !isRestrictedUser;   // Edit button + inline ID editing
+  const canEmailParcel = !isRestrictedUser;  // X-Ray email button
+  const canDeleteParcel = isAdminUser;       // ONLY admin can delete (staff cannot)
 
   // ── Manifest selection ──────────────────────────────────────────────────
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -482,7 +509,14 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
   // ── CRUD helpers ─────────────────────────────────────────────────────
   const handleParcelCreated = () => { fetchAllParcels(); setShowCreateForm(false); toast({ title: "Success", description: "Parcel created successfully" }); };
   const handleParcelUpdated = () => { fetchAllParcels(); setShowEditForm(false); setEditingParcel(null); toast({ title: "Success", description: "Parcel updated successfully" }); };
-  const handleEditClick = (parcel: Parcel) => { setEditingParcel(parcel); setShowEditForm(true); };
+  const handleEditClick = (parcel: Parcel) => {
+    // ROLE GATE: partners / restricted roles cannot edit parcels.
+    if (!canEditParcel) {
+      toast({ title: "Not allowed", description: "Your role cannot edit parcels.", variant: "destructive" });
+      return;
+    }
+    setEditingParcel(parcel); setShowEditForm(true);
+  };
   const handleAttachmentsClick = (parcel: Parcel) => { setAttachmentsParcel(parcel); setShowAttachments(true); };
 
   const handleInvoiceClick = async (parcel: Parcel) => {
@@ -508,6 +542,11 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
   };
 
   const handleDeleteParcel = async (parcelId: string, trackingId: string) => {
+    // ROLE GATE: ONLY admins can delete parcels (staff & partners cannot).
+    if (!canDeleteParcel) {
+      toast({ title: "Not allowed", description: "Only admins can delete parcels.", variant: "destructive" });
+      return;
+    }
     if (!window.confirm(`Are you sure you want to delete parcel ${trackingId}?`)) return;
     try {
       const { error } = await supabase.from("parcels").delete().eq("id", parcelId);
@@ -582,6 +621,12 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
   // ── Inline editing ───────────────────────────────────────────────────
   const startEditingCell = (parcel: Parcel, field: EditableField) => {
     if (savingCell) return;
+    // ROLE GATE: Reference / Tracking IDs are not editable for partners
+    // and other restricted roles.
+    if (!canEditParcel) {
+      toast({ title: "Not allowed", description: "Reference / Tracking IDs cannot be edited by your role.", variant: "destructive" });
+      return;
+    }
     setEditingCell({ id: parcel.id, field });
     setEditValue((parcel[field] as string) || "");
   };
@@ -816,12 +861,17 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               onChange={(e) => setEditValue(e.target.value)}
                               onBlur={saveEditingCell} onKeyDown={handleEditKeyDown}
                               className="h-6 font-mono text-xs w-full mb-1" />
-                          ) : (
+                          ) : canEditParcel ? (
                             <div
                               className="font-mono font-bold text-blue-600 cursor-pointer hover:underline decoration-dashed underline-offset-2 truncate"
                               onClick={() => startEditingCell(parcel, "reference_id")}
                               title={`Ref: ${parcel.reference_id || "N/A"} — click to edit`}
                             >
+                              {parcel.reference_id || <span className="text-slate-400 font-normal">No Ref</span>}
+                            </div>
+                          ) : (
+                            // ROLE GATE: not editable for partners — plain text
+                            <div className="font-mono font-bold text-blue-600 truncate" title={`Ref: ${parcel.reference_id || "N/A"}`}>
                               {parcel.reference_id || <span className="text-slate-400 font-normal">No Ref</span>}
                             </div>
                           )}
@@ -830,12 +880,17 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               onChange={(e) => setEditValue(e.target.value)}
                               onBlur={saveEditingCell} onKeyDown={handleEditKeyDown}
                               className="h-6 font-mono text-xs w-full mt-1" />
-                          ) : (
+                          ) : canEditParcel ? (
                             <div
                               className="font-mono text-[10px] text-slate-500 cursor-pointer hover:underline decoration-dashed underline-offset-2 truncate mt-0.5"
                               onClick={() => startEditingCell(parcel, "tracking_id")}
                               title={`Tracking: ${parcel.tracking_id} — click to edit`}
                             >
+                              {parcel.tracking_id}
+                            </div>
+                          ) : (
+                            // ROLE GATE: not editable for partners — plain text
+                            <div className="font-mono text-[10px] text-slate-500 truncate mt-0.5" title={`Tracking: ${parcel.tracking_id}`}>
                               {parcel.tracking_id}
                             </div>
                           )}
@@ -881,10 +936,12 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               onClick={() => { setSelectedParcel(parcel); setShowDetailsModal(true); }} title="View details">
                               <Eye className="h-3.5 w-3.5" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-500 hover:text-amber-600 hover:bg-amber-50"
-                              onClick={() => handleEditClick(parcel)} title="Edit">
-                              <Edit className="h-3.5 w-3.5" />
-                            </Button>
+                            {canEditParcel && (
+                              <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-500 hover:text-amber-600 hover:bg-amber-50"
+                                onClick={() => handleEditClick(parcel)} title="Edit">
+                                <Edit className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
                             <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-500 hover:text-fuchsia-600 hover:bg-fuchsia-50"
                               onClick={() => handleCloneParcel(parcel)} disabled={cloningId === parcel.id} title="Clone parcel">
                               {cloningId === parcel.id
@@ -908,24 +965,28 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               onClick={() => { setUndertakingParcel(parcel); setShowUndertaking(true); }} title="Undertaking Letter">
                               <ScrollText className="h-3.5 w-3.5" />
                             </Button>
-                            <Button variant="ghost" size="icon" className="h-7 w-7 text-red-400 hover:text-red-600 hover:bg-red-50"
-                              onClick={() => handleDeleteParcel(parcel.id, parcel.tracking_id)} title="Delete">
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              variant="ghost" size="icon"
-                              className={`h-7 w-7 ${emailedIds.has(parcel.id) ? "text-emerald-500 hover:bg-emerald-50" : "text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"}`}
-                              onClick={() => handleSendXrayEmail(parcel)}
-                              disabled={emailingId === parcel.id || !parcel.receiver_email}
-                              title={emailedIds.has(parcel.id) ? "Resend X-Ray Email" : "Send X-Ray Email"}
-                            >
-                              {emailingId === parcel.id
-                                ? <span className="animate-spin h-3.5 w-3.5 border-2 border-emerald-300 border-t-emerald-600 rounded-full inline-block" />
-                                : emailedIds.has(parcel.id)
-                                  ? <CheckCircle className="h-3.5 w-3.5" />
-                                  : <Mail className="h-3.5 w-3.5" />
-                              }
-                            </Button>
+                            {canDeleteParcel && (
+                              <Button variant="ghost" size="icon" className="h-7 w-7 text-red-400 hover:text-red-600 hover:bg-red-50"
+                                onClick={() => handleDeleteParcel(parcel.id, parcel.tracking_id)} title="Delete">
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            {canEmailParcel && (
+                              <Button
+                                variant="ghost" size="icon"
+                                className={`h-7 w-7 ${emailedIds.has(parcel.id) ? "text-emerald-500 hover:bg-emerald-50" : "text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"}`}
+                                onClick={() => handleSendXrayEmail(parcel)}
+                                disabled={emailingId === parcel.id || !parcel.receiver_email}
+                                title={emailedIds.has(parcel.id) ? "Resend X-Ray Email" : "Send X-Ray Email"}
+                              >
+                                {emailingId === parcel.id
+                                  ? <span className="animate-spin h-3.5 w-3.5 border-2 border-emerald-300 border-t-emerald-600 rounded-full inline-block" />
+                                  : emailedIds.has(parcel.id)
+                                    ? <CheckCircle className="h-3.5 w-3.5" />
+                                    : <Mail className="h-3.5 w-3.5" />
+                                }
+                              </Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -974,12 +1035,17 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               onChange={(e) => setEditValue(e.target.value)}
                               onBlur={saveEditingCell} onKeyDown={handleEditKeyDown}
                               className="h-7 font-mono text-xs w-36" />
-                          ) : (
+                          ) : canEditParcel ? (
                             <span
                               className="font-mono font-bold text-blue-600 text-sm cursor-pointer"
                               onClick={() => startEditingCell(parcel, "reference_id")}
                               title="Tap to edit reference ID"
                             >
+                              {parcel.reference_id || <span className="text-slate-400 font-normal text-xs">No Ref</span>}
+                            </span>
+                          ) : (
+                            // ROLE GATE: not editable for partners — plain text
+                            <span className="font-mono font-bold text-blue-600 text-sm">
                               {parcel.reference_id || <span className="text-slate-400 font-normal text-xs">No Ref</span>}
                             </span>
                           )}
@@ -994,12 +1060,17 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                             onChange={(e) => setEditValue(e.target.value)}
                             onBlur={saveEditingCell} onKeyDown={handleEditKeyDown}
                             className="h-7 font-mono text-xs w-full mt-1" />
-                        ) : (
+                        ) : canEditParcel ? (
                           <div
                             className="font-mono text-xs text-slate-500 mt-0.5 cursor-pointer"
                             onClick={() => startEditingCell(parcel, "tracking_id")}
                             title="Tap to edit tracking ID"
                           >
+                            {parcel.tracking_id}
+                          </div>
+                        ) : (
+                          // ROLE GATE: not editable for partners — plain text
+                          <div className="font-mono text-xs text-slate-500 mt-0.5">
                             {parcel.tracking_id}
                           </div>
                         )}
@@ -1040,10 +1111,12 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                         onClick={() => { setSelectedParcel(parcel); setShowDetailsModal(true); }} title="View details">
                         <Eye className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:text-amber-600 hover:bg-amber-50"
-                        onClick={() => handleEditClick(parcel)} title="Edit">
-                        <Edit className="h-4 w-4" />
-                      </Button>
+                      {canEditParcel && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:text-amber-600 hover:bg-amber-50"
+                          onClick={() => handleEditClick(parcel)} title="Edit">
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                      )}
                       <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:text-fuchsia-600 hover:bg-fuchsia-50"
                         onClick={() => handleCloneParcel(parcel)} disabled={cloningId === parcel.id} title="Clone parcel">
                         {cloningId === parcel.id
@@ -1067,24 +1140,28 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                         onClick={() => { setUndertakingParcel(parcel); setShowUndertaking(true); }} title="Undertaking Letter">
                         <ScrollText className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" className="h-8 w-8 text-red-400 hover:text-red-600 hover:bg-red-50"
-                        onClick={() => handleDeleteParcel(parcel.id, parcel.tracking_id)} title="Delete">
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost" size="icon"
-                        className={`h-8 w-8 ${emailedIds.has(parcel.id) ? "text-emerald-500 hover:bg-emerald-50" : "text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"}`}
-                        onClick={() => handleSendXrayEmail(parcel)}
-                        disabled={emailingId === parcel.id || !parcel.receiver_email}
-                        title={emailedIds.has(parcel.id) ? "Resend X-Ray Email" : "Send X-Ray Email"}
-                      >
-                        {emailingId === parcel.id
-                          ? <span className="animate-spin h-4 w-4 border-2 border-emerald-300 border-t-emerald-600 rounded-full inline-block" />
-                          : emailedIds.has(parcel.id)
-                            ? <CheckCircle className="h-4 w-4" />
-                            : <Mail className="h-4 w-4" />
-                        }
-                      </Button>
+                      {canDeleteParcel && (
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-400 hover:text-red-600 hover:bg-red-50"
+                          onClick={() => handleDeleteParcel(parcel.id, parcel.tracking_id)} title="Delete">
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {canEmailParcel && (
+                        <Button
+                          variant="ghost" size="icon"
+                          className={`h-8 w-8 ${emailedIds.has(parcel.id) ? "text-emerald-500 hover:bg-emerald-50" : "text-slate-500 hover:text-emerald-600 hover:bg-emerald-50"}`}
+                          onClick={() => handleSendXrayEmail(parcel)}
+                          disabled={emailingId === parcel.id || !parcel.receiver_email}
+                          title={emailedIds.has(parcel.id) ? "Resend X-Ray Email" : "Send X-Ray Email"}
+                        >
+                          {emailingId === parcel.id
+                            ? <span className="animate-spin h-4 w-4 border-2 border-emerald-300 border-t-emerald-600 rounded-full inline-block" />
+                            : emailedIds.has(parcel.id)
+                              ? <CheckCircle className="h-4 w-4" />
+                              : <Mail className="h-4 w-4" />
+                          }
+                        </Button>
+                      )}
                     </div>
                   </div>
                 );
@@ -1176,7 +1253,7 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
       <Dialog open={showEditForm} onOpenChange={(open) => { setShowEditForm(open); if (!open) setEditingParcel(null); }}>
         <DialogContent className="w-full max-w-4xl max-h-[90vh] overflow-y-auto overflow-x-hidden bg-[#0b0d1a] border border-white/10 text-white p-0 [&>button]:text-white/50 [&>button]:hover:text-white [&>button]:top-3 [&>button]:right-3">
           <DialogHeader className="sr-only"><DialogTitle>Edit Parcel — {editingParcel?.tracking_id}</DialogTitle></DialogHeader>
-          {editingParcel && <ParcelForm parcel={editingParcel} onSuccess={handleParcelUpdated} />}
+          {editingParcel && <ParcelForm parcel={editingParcel} onSuccess={handleParcelUpdated} lockIdentifiers={isRestrictedUser} />}
         </DialogContent>
       </Dialog>
 

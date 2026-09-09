@@ -17,7 +17,7 @@ import {
   MapPin, FileText, Upload, RefreshCw, Eye,
   CheckCircle2, AlertCircle, ImageIcon, Trash2,
   ChevronDown, Globe, Landmark, BarChart3,
-  Activity, Settings, Shield, Instagram, Linkedin,
+  Activity, Shield, Instagram, Linkedin,
   Facebook, Clock, Hash, Briefcase, Wallet,
   Camera, Link, IdCard,
 } from "lucide-react";
@@ -182,19 +182,6 @@ const DocUpload = ({
   );
 };
 
-// ── Permission toggle row ─────────────────────────────────────────────────────
-const PermRow = ({ label, desc, checked, onChange, color = "sky" }: any) => (
-  <div className={`flex items-center justify-between rounded-xl bg-${color}-500/5 border border-${color}-500/12 px-3.5 py-2.5`}>
-    <div>
-      <p className={`text-sm font-medium text-${color}-300`}>{label}</p>
-      {desc && <p className="text-[11px] text-white/30 mt-0.5">{desc}</p>}
-    </div>
-    <Switch checked={!!checked} onCheckedChange={onChange}
-      className={`data-[state=checked]:bg-${color}-500`} />
-  </div>
-);
-
-// ── Stat card (read-only) ─────────────────────────────────────────────────────
 const StatCard = ({ label, value, icon: Icon, color = "emerald" }: any) => (
   <div className={`rounded-xl border border-${color}-500/15 bg-${color}-500/5 p-3 text-center`}>
     <Icon className={`h-5 w-5 text-${color}-400 mx-auto mb-1`} />
@@ -240,11 +227,11 @@ export const PartnerProfileModal = ({
     // Documents
     profile_photo_url: "", company_logo_url: "",
     business_cert_url: "", tax_cert_url: "", agreement_url: "",
-    // Permissions (stored on partner_profiles or profiles)
-    can_create_agents: false, can_assign_tasks: false,
-    can_manage_attendance: false, can_view_salary: false,
-    can_export_reports: false, can_invite_users: false,
-    login_enabled: true,
+    // NOTE: permission toggles (can_create_agents, can_assign_tasks,
+    // can_manage_attendance, can_view_salary, can_export_reports,
+    // can_invite_users, login_enabled, can_manage_users) were REMOVED.
+    // Permissions are now decided ONLY by the account's role
+    // (admin / staff / partner) — there are no per-user allow toggles.
   };
 
   useEffect(() => {
@@ -323,13 +310,8 @@ export const PartnerProfileModal = ({
         business_cert_url: form.business_cert_url?.trim() || null,
         tax_cert_url: form.tax_cert_url?.trim() || null,
         agreement_url: form.agreement_url?.trim() || null,
-        can_create_agents: !!form.can_create_agents,
-        can_assign_tasks: !!form.can_assign_tasks,
-        can_manage_attendance: !!form.can_manage_attendance,
-        can_view_salary: !!form.can_view_salary,
-        can_export_reports: !!form.can_export_reports,
-        can_invite_users: !!form.can_invite_users,
-        login_enabled: form.login_enabled !== false,
+        // NOTE: permission fields are intentionally NOT saved anymore —
+        // permissions come from the login role only (no allow-toggles).
       };
 
       let result;
@@ -356,9 +338,6 @@ export const PartnerProfileModal = ({
       } else {
         toast({ title: "Partner profile saved ✓" });
       }
-
-      // Update can_manage_users on profiles table
-      await supabase.from("profiles").update({ can_manage_users: !!user.can_manage_users }).eq("user_id", user.user_id);
 
       onSaved({ ...result.data, ...payload });
       onClose();
@@ -425,7 +404,7 @@ export const PartnerProfileModal = ({
                 { value: "profile", label: "Profile" },
                 { value: "identity", label: "Identity & Business" },
                 { value: "bank", label: "Bank" },
-                { value: "permissions", label: "Permissions & Docs" },
+                { value: "permissions", label: "Documents" },
                 { value: "stats", label: "Stats & Activity" },
               ].map(({ value, label }) => (
                 <TabsTrigger key={value} value={value}
@@ -605,26 +584,11 @@ export const PartnerProfileModal = ({
             </TabsContent>
 
             {/* ════════════════════════════════════════
-                TAB: PERMISSIONS & DOCS
+                TAB: DOCUMENTS
+                (permission toggles removed — permissions are decided by
+                 the login role: admin / staff / partner)
             ════════════════════════════════════════ */}
             <TabsContent value="permissions" className="p-5 space-y-4 mt-0">
-
-              <Section title="Account Settings" icon={Settings} color="sky">
-                <div className="space-y-2">
-                  <PermRow label="Can Manage Users" desc="Access user management section" checked={user.can_manage_users}
-                    onChange={async (v: boolean) => {
-                      await supabase.from("profiles").update({ can_manage_users: v }).eq("user_id", user.user_id);
-                    }} color="sky" />
-                  <PermRow label="Can Create Agents" checked={form.can_create_agents} onChange={(v: boolean) => setVal("can_create_agents", v)} color="sky" />
-                  <PermRow label="Can Assign Tasks" checked={form.can_assign_tasks} onChange={(v: boolean) => setVal("can_assign_tasks", v)} color="sky" />
-                  <PermRow label="Can Manage Attendance" checked={form.can_manage_attendance} onChange={(v: boolean) => setVal("can_manage_attendance", v)} color="sky" />
-                  <PermRow label="Can View Salary" checked={form.can_view_salary} onChange={(v: boolean) => setVal("can_view_salary", v)} color="violet" />
-                  <PermRow label="Can Export Reports" checked={form.can_export_reports} onChange={(v: boolean) => setVal("can_export_reports", v)} color="violet" />
-                  <PermRow label="Can Invite Users" checked={form.can_invite_users} onChange={(v: boolean) => setVal("can_invite_users", v)} color="violet" />
-                  <PermRow label="Login Enabled" desc="Disable to block portal access without suspending" checked={form.login_enabled !== false}
-                    onChange={(v: boolean) => setVal("login_enabled", v)} color="emerald" />
-                </div>
-              </Section>
 
               <Section title="Documents" icon={FileText} color="amber">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
