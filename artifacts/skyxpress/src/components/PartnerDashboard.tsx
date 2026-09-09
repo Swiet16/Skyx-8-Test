@@ -2,11 +2,10 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Package, FileText, ClipboardList, Users, Building2,
-  Plus, ArrowRight, TrendingUp,
+  Package, ClipboardList, Users, Building2,
+  Plus, ArrowRight,
 } from "lucide-react";
 import { ParcelManagement } from "./ParcelManagement";
 import { ManifestStock } from "./ManifestStock";
@@ -31,20 +30,13 @@ export const PartnerDashboard = ({ user, profile }: PartnerDashboardProps) => {
     orderBy: { column: "created_at", ascending: false },
   });
 
-  const { data: myInvoices } = useLiveData<any>({
-    table: "invoices",
-    filter: { column: "user_id", value: user?.id },
-    orderBy: { column: "created_at", ascending: false },
-  });
-
   const activeParcels = myParcels.filter(
     (p) => !["delivered", "cancelled"].includes(p.current_status),
   );
 
-  const totalRevenue = myInvoices.reduce(
-    (sum, inv) => sum + (inv.final_amount || inv.total_amount || 0),
-    0,
-  );
+  // NOTE: Invoices have been removed from the partner dashboard entirely.
+  // Invoicing is admin/staff-only now — partners no longer see invoice data,
+  // the "Total Invoiced" stat card, or the "My Invoices" tab.
 
   return (
     <div className="space-y-6">
@@ -54,13 +46,13 @@ export const PartnerDashboard = ({ user, profile }: PartnerDashboardProps) => {
         <div className="min-w-0">
           <p className="text-sm font-semibold text-emerald-300 truncate">{orgName}</p>
           <p className="text-xs text-emerald-400/60">
-            Partner account — you can only view and create your own parcels, manifests, and invoices.
+            Partner account — you can only view and create your own parcels and manifests.
           </p>
         </div>
       </div>
 
-      {/* Overview cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      {/* Overview cards (invoices removed — parcels + manifests only) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <Card
           className="cursor-pointer hover:-translate-y-0.5 transition-transform"
           onClick={() => setActiveTab("parcels")}
@@ -89,16 +81,6 @@ export const PartnerDashboard = ({ user, profile }: PartnerDashboardProps) => {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Invoiced</CardTitle>
-            <TrendingUp className="h-4 w-4 text-emerald-500" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">${totalRevenue.toFixed(2)}</div>
-            <p className="text-xs text-muted-foreground">{myInvoices.length} invoice{myInvoices.length !== 1 ? "s" : ""}</p>
-          </CardContent>
-        </Card>
       </div>
 
       {/* Tabs */}
@@ -111,10 +93,6 @@ export const PartnerDashboard = ({ user, profile }: PartnerDashboardProps) => {
           <TabsTrigger value="manifests" className="gap-1.5">
             <ClipboardList className="h-3.5 w-3.5" />
             My Manifests
-          </TabsTrigger>
-          <TabsTrigger value="invoices" className="gap-1.5">
-            <FileText className="h-3.5 w-3.5" />
-            My Invoices
           </TabsTrigger>
           {canManageUsers && (
             <TabsTrigger value="users" className="gap-1.5">
@@ -132,68 +110,6 @@ export const PartnerDashboard = ({ user, profile }: PartnerDashboardProps) => {
         {/* My Manifests — filtered to this partner's email */}
         <TabsContent value="manifests">
           <ManifestStock filterUserId={user?.id} filterEmail={user?.email} />
-        </TabsContent>
-
-        {/* My Invoices */}
-        <TabsContent value="invoices">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-base">
-                <FileText className="h-4 w-4 text-emerald-500" />
-                My Invoices
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {myInvoices.length === 0 ? (
-                <div className="py-12 text-center">
-                  <FileText className="mx-auto h-8 w-8 text-muted-foreground/30 mb-3" />
-                  <p className="text-sm text-muted-foreground">No invoices yet.</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left text-muted-foreground text-xs">
-                        <th className="pb-2 pr-4 font-medium">Invoice #</th>
-                        <th className="pb-2 pr-4 font-medium">Customer</th>
-                        <th className="pb-2 pr-4 font-medium">Amount</th>
-                        <th className="pb-2 pr-4 font-medium">Status</th>
-                        <th className="pb-2 font-medium">Date</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {myInvoices.map((inv) => (
-                        <tr key={inv.id} className="hover:bg-muted/30">
-                          <td className="py-2.5 pr-4 font-mono text-xs text-primary">
-                            {inv.invoice_number}
-                          </td>
-                          <td className="py-2.5 pr-4">{inv.customer_name}</td>
-                          <td className="py-2.5 pr-4 font-semibold">
-                            {inv.currency} {(inv.final_amount || inv.total_amount || 0).toFixed(2)}
-                          </td>
-                          <td className="py-2.5 pr-4">
-                            <Badge
-                              variant="outline"
-                              className={
-                                inv.payment_status === "paid"
-                                  ? "border-emerald-500/30 text-emerald-500"
-                                  : "border-amber-500/30 text-amber-500"
-                              }
-                            >
-                              {inv.payment_status || "pending"}
-                            </Badge>
-                          </td>
-                          <td className="py-2.5 text-muted-foreground text-xs">
-                            {new Date(inv.created_at).toLocaleDateString()}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </CardContent>
-          </Card>
         </TabsContent>
 
         {/* User Management — only if can_manage_users */}

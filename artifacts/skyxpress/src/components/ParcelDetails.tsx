@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -108,6 +108,29 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
   const [emailSent, setEmailSent] = useState(false);
   const [emailSentAt, setEmailSentAt] = useState<string | null>(parcel.xray_email_sent_at || null);
   const { toast } = useToast();
+
+  // ── CREATED BY: resolve the creator's name + login role ─────────────
+  // parcels.created_by stores the auth user id of whoever created the
+  // parcel. We look up their profile so partner-created parcels show
+  // "Created by <partner name>" together with the creator's role.
+  const [creator, setCreator] = useState<{ full_name?: string | null; role?: string | null; company?: string | null } | null>(null);
+
+  useEffect(() => {
+    if (!parcel?.created_by) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("user_id, full_name, role, company")
+        .eq("user_id", parcel.created_by)
+        .single();
+      if (!cancelled) setCreator(data || null);
+    })();
+    return () => { cancelled = true; };
+  }, [parcel?.created_by]);
+
+  const creatorName = creator?.full_name || parcel?.created_by_name || parcel?.made_by_name || null;
+  const creatorRole = creator?.role || null;
 
   // Local overrides so edits made here show immediately without waiting on the
   // parent list refetch (the parent doesn't re-pass a fresh `parcel` prop into
@@ -343,6 +366,29 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
         <div className="min-w-0">
           <h2 className="text-xl font-bold break-all leading-tight">{parcel.tracking_id}</h2>
           <p className="text-muted-foreground text-sm">{parcel.from_country} → {parcel.to_country}</p>
+          {/* CREATED BY: show the creator's name + login role (partner parcels
+              show the partner's name) */}
+          {(creatorName || creatorRole) && (
+            <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+              {creatorName && (
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-700 bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5">
+                  <User className="h-3 w-3" />
+                  Created by {creatorName}
+                </span>
+              )}
+              {creatorRole && (
+                <span className={`text-[9px] font-bold uppercase tracking-wide rounded px-1.5 py-0.5 border ${
+                  creatorRole === "partner"
+                    ? "text-purple-700 bg-purple-50 border-purple-200"
+                    : creatorRole === "staff"
+                      ? "text-blue-700 bg-blue-50 border-blue-200"
+                      : "text-red-700 bg-red-50 border-red-200"
+                }`}>
+                  {creatorRole}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <Badge className={`self-start sm:self-auto shrink-0 ${statusColors[parcel.current_status as keyof typeof statusColors] || "bg-gray-100 text-gray-800"}`}>
           <StatusIcon className="w-4 h-4 mr-2" />

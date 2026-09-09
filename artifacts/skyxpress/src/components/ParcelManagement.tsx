@@ -396,6 +396,40 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
     return countryMap[code] || code;
   };
 
+  // ── CREATED BY: resolve each parcel's creator (name + login role) ─────
+  // parcels.created_by holds the auth user id of whoever created the parcel.
+  // We look those ids up in profiles once per fetch, so the table can show
+  // "Created by <partner name>" with the creator's role badge (partner /
+  // staff / admin). No schema change needed — the role is derived live.
+  const [creatorMap, setCreatorMap] = useState<Record<string, { full_name?: string | null; role?: string | null; company?: string | null }>>({});
+
+  useEffect(() => {
+    const ids = [...new Set(allParcels.map((p: any) => p.created_by).filter(Boolean))] as string[];
+    if (ids.length === 0) { setCreatorMap({}); return; }
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("user_id, full_name, role, company")
+        .in("user_id", ids);
+      if (cancelled) return;
+      const map: Record<string, { full_name?: string | null; role?: string | null; company?: string | null }> = {};
+      (data || []).forEach((r: any) => { map[r.user_id] = r; });
+      setCreatorMap(map);
+    })();
+    return () => { cancelled = true; };
+  }, [allParcels]);
+
+  // Creator info for one parcel: profile lookup first, then the name stored
+  // on the parcel at creation time (created_by_name / made_by_name) as a
+  // fallback for old parcels whose creator profile is unavailable.
+  const getCreatorInfo = (parcel: any) => {
+    const prof = parcel.created_by ? creatorMap[parcel.created_by] : undefined;
+    const name = prof?.full_name || parcel.created_by_name || parcel.made_by_name || null;
+    const role = prof?.role || null;
+    return { name, role, isPartner: role === "partner" };
+  };
+
   // parcels reference for selection helpers (full filtered list)
   const parcels = filteredParcels;
 
@@ -921,6 +955,35 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               {parcel.branch || parcel.made_by_name}
                             </div>
                           )}
+                          {/* CREATED BY: show the creator's name + login role
+                              (partner parcels show the partner's name) */}
+                          {(() => {
+                            const { name: creatorName, role: creatorRole } = getCreatorInfo(parcel);
+                            if (!creatorName && !creatorRole) return null;
+                            return (
+                              <div className="mt-1 flex items-center gap-1 flex-wrap max-w-full">
+                                {creatorName && (
+                                  <span
+                                    className="text-[10px] font-semibold text-slate-700 bg-slate-100 border border-slate-200 rounded px-1 py-0.5 inline-flex items-center gap-1 min-w-0"
+                                    title={`Created by ${creatorName}`}
+                                  >
+                                    <span className="truncate">Created by {creatorName}</span>
+                                  </span>
+                                )}
+                                {creatorRole && (
+                                  <span className={`text-[9px] font-bold uppercase tracking-wide rounded px-1 py-0.5 border ${
+                                    creatorRole === "partner"
+                                      ? "text-purple-700 bg-purple-50 border-purple-200"
+                                      : creatorRole === "staff"
+                                        ? "text-blue-700 bg-blue-50 border-blue-200"
+                                        : "text-red-700 bg-red-50 border-red-200"
+                                  }`}>
+                                    {creatorRole}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </TableCell>
                         <TableCell className="py-2.5 pr-2">
                           <Badge className={`text-[10px] px-1.5 py-0.5 whitespace-nowrap ${statusColors[parcel.current_status] || "bg-gray-100 text-gray-800"}`}>
@@ -1102,6 +1165,31 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                         {(parcel.branch || parcel.made_by_name) && (
                           <p className="text-[10px] font-semibold text-sky-700 truncate">{parcel.branch || parcel.made_by_name}</p>
                         )}
+                        {/* CREATED BY (mobile): creator name + role badge */}
+                        {(() => {
+                          const { name: creatorName, role: creatorRole } = getCreatorInfo(parcel);
+                          if (!creatorName && !creatorRole) return null;
+                          return (
+                            <div className="mt-0.5 flex items-center gap-1 flex-wrap">
+                              {creatorName && (
+                                <p className="text-[10px] font-semibold text-slate-600 truncate max-w-full">
+                                  Created by {creatorName}
+                                </p>
+                              )}
+                              {creatorRole && (
+                                <span className={`text-[8px] font-bold uppercase tracking-wide rounded px-1 py-0.5 border ${
+                                  creatorRole === "partner"
+                                    ? "text-purple-700 bg-purple-50 border-purple-200"
+                                    : creatorRole === "staff"
+                                      ? "text-blue-700 bg-blue-50 border-blue-200"
+                                      : "text-red-700 bg-red-50 border-red-200"
+                                }`}>
+                                  {creatorRole}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
 

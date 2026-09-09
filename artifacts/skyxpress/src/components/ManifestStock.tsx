@@ -701,6 +701,8 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
   const [showBagging, setShowBagging]         = useState(false);
   const [showHistory, setShowHistory]         = useState(false);
   const [currentUser, setCurrentUser]         = useState<{ email: string; name: string } | null>(null);
+  // ROLE: resolved from profiles for the logged-in user — drives permission gating
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
   const [licenses, setLicenses]               = useState<string[]>([]);
   const [addingLicense, setAddingLicense]     = useState(false);
   const [newLicenseCode, setNewLicenseCode]   = useState("");
@@ -764,14 +766,28 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
 
   // ── Auth user ──────────────────────────────────────────────────────────────
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(async ({ data }) => {
       const u = data?.session?.user;
       if (u) {
         const name = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split("@")[0] || "Admin";
         setCurrentUser({ email: u.email || "", name });
+        // ROLE GATE support: resolve the logged-in user's role from profiles
+        const { data: prof } = await supabase.from("profiles").select("role").eq("user_id", u.id).single();
+        setCurrentUserRole(prof?.role ?? null);
       }
     });
   }, []);
+
+  // ── ROLE-BASED PERMISSIONS (enforced by logged-in role) ────────────────────
+  // Partner scope   = this component renders one partner's own manifests
+  //                   (PartnerDashboard passes filterUserId / filterEmail).
+  // Restricted role = any role that is not admin / staff (partner, user, …).
+  // Partners can VIEW the manifest list, download Excel/PDF and set status,
+  // but CANNOT open the manifest editor (no editing) and CANNOT delete.
+  const isPartnerScope   = !!(filterUserId || filterEmail);
+  const isRestrictedRole = !!currentUserRole && currentUserRole !== "admin" && currentUserRole !== "staff";
+  const canEditManifest   = !isPartnerScope && !isRestrictedRole; // open / edit manifest
+  const canDeleteManifest = currentUserRole === "admin";          // ONLY admin can delete manifests
 
   const reload = useCallback(async () => {
     const data = await loadManifestStockDB();
@@ -828,7 +844,14 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
     })();
   }, [isAdminView]);
 
-  const openDetail = (entry: ManifestStockEntry) => {
+  const openDetail = (entry: ManifestStockEntry, opts?: { force?: boolean }) => {
+    // ROLE GATE: partners / restricted roles cannot open or edit manifests.
+    // The create-manifest flows call this with { force: true } so a freshly
+    // generated manifest can still be filled in once by its creator.
+    if (!opts?.force && !canEditManifest) {
+      toast({ title: "Not allowed", description: "Your role cannot edit manifests.", variant: "destructive" });
+      return;
+    }
     setSelected(entry);
     setEditing({
       ...entry,
@@ -901,6 +924,11 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
   };
 
   const handleDelete = async (manifestId: string) => {
+    // ROLE GATE: only admins can delete manifests.
+    if (!canDeleteManifest) {
+      toast({ title: "Not allowed", description: "Only admins can delete manifests.", variant: "destructive" });
+      return;
+    }
     if (!window.confirm(`Delete manifest ${manifestId}? This cannot be undone.`)) return;
     await deleteManifestFromStockDB(manifestId);
     await reload();
@@ -1058,7 +1086,8 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
       setFindParcelResults([]);
       setFindParcelQuery("");
       toast({ title: "Manifest created ✓", description: `${manifestId} · ${parcel.tracking_id}` });
-      openDetail(newEntry);
+      // force: the creator may fill in the manifest they just created once
+      openDetail(newEntry, { force: true });
     } catch (e: any) {
       toast({ title: "Failed to create manifest", description: e.message, variant: "destructive" });
     } finally {
@@ -1163,7 +1192,8 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
         title: "Manifest created ✓",
         description: `${manifestId} · ${count} parcel${count > 1 ? "s" : ""}`,
       });
-      openDetail(newEntry);
+      // force: the creator may fill in the manifest they just created once
+      openDetail(newEntry, { force: true });
     } catch (e: any) {
       toast({ title: "Failed to create manifest", description: e.message, variant: "destructive" });
     } finally {
@@ -1805,7 +1835,9 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
                           <div className="flex items-center gap-1 justify-end">
                             <Button variant="ghost" size="sm" title="Excel" className="gap-1 text-green-700 hover:bg-green-50 h-7 px-2" onClick={() => handleExcelDownload(entry)} disabled={downloading === entry.manifestId + "-xls"}><FileSpreadsheet className="h-3.5 w-3.5" /></Button>
                             <Button variant="ghost" size="sm" title="PDF" className="gap-1 text-blue-700 hover:bg-blue-50 h-7 px-2" onClick={() => handlePDFDownload(entry)} disabled={downloading === entry.manifestId + "-pdf"}><FileDown className="h-3.5 w-3.5" /></Button>
-                            <Button variant="ghost" size="sm" title="Delete" className="text-red-400 hover:text-red-600 hover:bg-red-50 h-7 px-2" onClick={() => handleDelete(entry.manifestId)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                            {canDeleteManifest && (
+                              <Button variant="ghost" size="sm" title="Delete" className="text-red-400 hover:text-red-600 hover:bg-red-50 h-7 px-2" onClick={() => handleDelete(entry.manifestId)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -1882,7 +1914,9 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
                           </Select>
                           <Button variant="ghost" size="sm" title="Excel" className="h-7 px-2 text-green-700 hover:bg-green-50" onClick={() => handleExcelDownload(entry)} disabled={downloading === entry.manifestId + "-xls"}><FileSpreadsheet className="h-4 w-4" /></Button>
                           <Button variant="ghost" size="sm" title="PDF" className="h-7 px-2 text-blue-700 hover:bg-blue-50" onClick={() => handlePDFDownload(entry)} disabled={downloading === entry.manifestId + "-pdf"}><FileDown className="h-4 w-4" /></Button>
-                          <Button variant="ghost" size="sm" title="Delete" className="h-7 px-2 text-red-400 hover:text-red-600 hover:bg-red-50" onClick={() => handleDelete(entry.manifestId)}><Trash2 className="h-4 w-4" /></Button>
+                          {canDeleteManifest && (
+                            <Button variant="ghost" size="sm" title="Delete" className="h-7 px-2 text-red-400 hover:text-red-600 hover:bg-red-50" onClick={() => handleDelete(entry.manifestId)}><Trash2 className="h-4 w-4" /></Button>
+                          )}
                         </div>
                       </div>
                     </div>
