@@ -160,7 +160,10 @@ export async function generateManifestExcel(
       description, // Description
       // FIX: TRACKING I'D must show the tracking id (was `reference_id ||
       // tracking_id`, which always displayed the reference id here).
-      p.tracking_id || p.reference_id, // TRACKING I'D
+      // The trailing `|| ""` guarantees the value is always `string` (not
+      // `string | undefined`), which fixes the TS2322 type error that was
+      // breaking the Vercel build.
+      p.tracking_id || p.reference_id || "", // TRACKING I'D
       p.service_type || "", // SERVICE
       "", // LABEL (checked off manually)
     ];
