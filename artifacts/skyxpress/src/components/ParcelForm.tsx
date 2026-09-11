@@ -24,6 +24,10 @@ interface ParcelFormProps {
    * parcel) the Reference ID and Tracking ID become read-only and are
    * excluded from the update payload, so they can never be changed. */
   lockIdentifiers?: boolean;
+  /** ROLE GATE: when true (any non-admin role) the address fields become
+   * read-only AND the QuickFill address-search box is hidden. Only admins
+   * can search / fill the sender + receiver address fields. */
+  lockAddress?: boolean;
 }
 interface Country { code: string; name: string; continent?: string; }
 interface FormData {
@@ -509,12 +513,16 @@ const TypePicker = ({ value, onChange }: { value: string; onChange: (v: string) 
 );
 
 // ─── Main Form ────────────────────────────────────────────────────────────────
-export const ParcelForm = ({ onSuccess, parcel, lockIdentifiers = false }: ParcelFormProps) => {
+export const ParcelForm = ({ onSuccess, parcel, lockIdentifiers = false, lockAddress = false }: ParcelFormProps) => {
   const isEdit = !!parcel;
   // Identifiers (Reference / Tracking IDs) are locked when a restricted role
   // (e.g. partner) edits an existing parcel. Creating a new parcel is still
   // allowed — IDs are auto-generated there anyway.
   const idsLocked = lockIdentifiers && isEdit;
+  // Address QuickFill search + manual address editing is admin-only.
+  // When locked, the QuickFill box is hidden and every address <textarea>/<input>
+  // becomes readOnly with a hint explaining why.
+  const addrLocked = !!lockAddress;
   const { toast } = useToast();
   const [step, setStep] = useState(0);
   const [countries, setCountries] = useState<Country[]>([]);
@@ -846,6 +854,7 @@ export const ParcelForm = ({ onSuccess, parcel, lockIdentifiers = false }: Parce
 
   const renderStep1 = () => (
     <SectionCard title="Sender Information" icon={User} color="#8B5CF6">
+      {!addrLocked && (
       <QuickFill
         value={senderSearch}
         onChange={setSenderSearch}
@@ -855,6 +864,12 @@ export const ParcelForm = ({ onSuccess, parcel, lockIdentifiers = false }: Parce
         onSelect={fillSender}
         placeholder="Quick-fill from previous parcel…"
       />
+      )}
+      {addrLocked && (
+        <div className="col-span-2 text-[11px] text-amber-300/80 bg-amber-500/5 border border-amber-500/20 rounded-md px-3 py-2">
+          Address fields are read-only for your role. Only an admin can search or edit addresses.
+        </div>
+      )}
       <Field label="Full Name" required>
         <StyledInput value={formData.sender_name} onChange={(e: any) => set("sender_name", e.target.value)} placeholder="John Smith" />
       </Field>
@@ -886,27 +901,29 @@ export const ParcelForm = ({ onSuccess, parcel, lockIdentifiers = false }: Parce
         <StyledInput value={formData.sender_tax_id} onChange={(e: any) => set("sender_tax_id", e.target.value)} placeholder="Optional" />
       </Field>
       <div className="col-span-2">
-        <Field label="Address" required>
+        <Field label="Address" required hint={addrLocked ? "Locked — admin only" : undefined}>
           <textarea
             value={formData.sender_address}
             onChange={(e) => set("sender_address", e.target.value)}
             rows={2}
             placeholder="Street address"
-            className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-white/25 resize-none"
+            readOnly={addrLocked}
+            className={`w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-white/25 resize-none ${addrLocked ? "opacity-60 cursor-not-allowed" : ""}`}
           />
         </Field>
       </div>
-      <Field label="Address Line 2">
-        <StyledInput value={formData.sender_address_2} onChange={(e: any) => set("sender_address_2", e.target.value)} placeholder="Optional" />
+      <Field label="Address Line 2" hint={addrLocked ? "Locked" : undefined}>
+        <StyledInput value={formData.sender_address_2} onChange={(e: any) => set("sender_address_2", e.target.value)} placeholder="Optional" readOnly={addrLocked} className={addrLocked ? "opacity-60 cursor-not-allowed" : ""} />
       </Field>
-      <Field label="Address Line 3">
-        <StyledInput value={formData.sender_address_3} onChange={(e: any) => set("sender_address_3", e.target.value)} placeholder="Optional" />
+      <Field label="Address Line 3" hint={addrLocked ? "Locked" : undefined}>
+        <StyledInput value={formData.sender_address_3} onChange={(e: any) => set("sender_address_3", e.target.value)} placeholder="Optional" readOnly={addrLocked} className={addrLocked ? "opacity-60 cursor-not-allowed" : ""} />
       </Field>
     </SectionCard>
   );
 
   const renderStep2 = () => (
     <SectionCard title="Receiver Information" icon={MapPin} color="#3B82F6">
+      {!addrLocked && (
       <QuickFill
         value={receiverSearch}
         onChange={setReceiverSearch}
@@ -916,6 +933,12 @@ export const ParcelForm = ({ onSuccess, parcel, lockIdentifiers = false }: Parce
         onSelect={fillReceiver}
         placeholder="Quick-fill from previous parcel…"
       />
+      )}
+      {addrLocked && (
+        <div className="col-span-2 text-[11px] text-amber-300/80 bg-amber-500/5 border border-amber-500/20 rounded-md px-3 py-2">
+          Address fields are read-only for your role. Only an admin can search or edit addresses.
+        </div>
+      )}
       <Field label="Full Name" required>
         <StyledInput value={formData.receiver_name} onChange={(e: any) => set("receiver_name", e.target.value)} placeholder="Jane Doe" />
       </Field>
@@ -950,21 +973,22 @@ export const ParcelForm = ({ onSuccess, parcel, lockIdentifiers = false }: Parce
         <StyledInput value={formData.receiver_tax_id} onChange={(e: any) => set("receiver_tax_id", e.target.value)} placeholder="Optional" />
       </Field>
       <div className="col-span-2">
-        <Field label="Address" required>
+        <Field label="Address" required hint={addrLocked ? "Locked — admin only" : undefined}>
           <textarea
             value={formData.receiver_address}
             onChange={(e) => set("receiver_address", e.target.value)}
             rows={2}
             placeholder="Street address"
-            className="w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-white/25 resize-none"
+            readOnly={addrLocked}
+            className={`w-full rounded-md border border-white/10 bg-white/5 px-3 py-2 text-sm text-white placeholder:text-white/25 focus:outline-none focus:border-white/25 resize-none ${addrLocked ? "opacity-60 cursor-not-allowed" : ""}`}
           />
         </Field>
       </div>
-      <Field label="Address Line 2">
-        <StyledInput value={formData.receiver_address_2} onChange={(e: any) => set("receiver_address_2", e.target.value)} placeholder="Optional" />
+      <Field label="Address Line 2" hint={addrLocked ? "Locked" : undefined}>
+        <StyledInput value={formData.receiver_address_2} onChange={(e: any) => set("receiver_address_2", e.target.value)} placeholder="Optional" readOnly={addrLocked} className={addrLocked ? "opacity-60 cursor-not-allowed" : ""} />
       </Field>
-      <Field label="Address Line 3">
-        <StyledInput value={formData.receiver_address_3} onChange={(e: any) => set("receiver_address_3", e.target.value)} placeholder="Optional" />
+      <Field label="Address Line 3" hint={addrLocked ? "Locked" : undefined}>
+        <StyledInput value={formData.receiver_address_3} onChange={(e: any) => set("receiver_address_3", e.target.value)} placeholder="Optional" readOnly={addrLocked} className={addrLocked ? "opacity-60 cursor-not-allowed" : ""} />
       </Field>
     </SectionCard>
   );

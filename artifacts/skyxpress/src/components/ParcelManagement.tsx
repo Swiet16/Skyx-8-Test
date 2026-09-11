@@ -816,7 +816,7 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                   <DialogHeader className="sr-only">
                     <DialogTitle>Create New Parcel</DialogTitle>
                   </DialogHeader>
-                  <ParcelForm onSuccess={handleParcelCreated} />
+                  <ParcelForm onSuccess={handleParcelCreated} lockAddress={!isAdminUser} />
                 </DialogContent>
               </Dialog>
             </div>
@@ -1341,7 +1341,7 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
       <Dialog open={showEditForm} onOpenChange={(open) => { setShowEditForm(open); if (!open) setEditingParcel(null); }}>
         <DialogContent className="w-full max-w-4xl max-h-[90vh] overflow-y-auto overflow-x-hidden bg-[#0b0d1a] border border-white/10 text-white p-0 [&>button]:text-white/50 [&>button]:hover:text-white [&>button]:top-3 [&>button]:right-3">
           <DialogHeader className="sr-only"><DialogTitle>Edit Parcel — {editingParcel?.tracking_id}</DialogTitle></DialogHeader>
-          {editingParcel && <ParcelForm parcel={editingParcel} onSuccess={handleParcelUpdated} lockIdentifiers={!isAdminUser} />}
+          {editingParcel && <ParcelForm parcel={editingParcel} onSuccess={handleParcelUpdated} lockIdentifiers={!isAdminUser} lockAddress={!isAdminUser} />}
         </DialogContent>
       </Dialog>
 
