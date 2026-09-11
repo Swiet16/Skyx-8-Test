@@ -436,19 +436,66 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
   };
 
   // ── PARTNER LIST: fetched once for the admin "Assign to Partner" dialog. ──
-  // Mirrors the lookup that ManifestStock uses so the same partner_profiles
-  // rows drive both UIs. Only fetched for admins.
-  const [partnerList, setPartnerList] = useState<Array<{ user_id: string; username: string | null; branch: string | null; full_name: string | null }>>([]);
+  // We query the profiles table for every user whose role is 'partner' and
+  // LEFT JOIN the optional partner_profiles row (username / branch / status)
+  // via a parallel fetch + in-memory merge. This is the same data that
+  // PartnerManagement.tsx uses, so the dropdown always shows the same
+  // partners the admin sees on the Partners page.
+  const [partnerList, setPartnerList] = useState<Array<{
+    user_id: string;
+    full_name: string | null;
+    email: string | null;
+    username: string | null;
+    branch: string | null;
+    status: string | null;
+  }>>([]);
   useEffect(() => {
     if (!isAdminUser) return;
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
+      // 1) Every profile whose role is 'partner'
+      const { data: profiles, error: profilesErr } = await supabase
+        .from("profiles")
+        .select("user_id, full_name, role")
+        .eq("role", "partner");
+      if (profilesErr) {
+        console.warn("[ParcelManagement] profiles(partner) fetch error:", profilesErr.message);
+        return;
+      }
+      if (cancelled || !profiles || profiles.length === 0) {
+        setPartnerList([]);
+        return;
+      }
+      // 2) partner_profiles rows (optional) for username + branch + status
+      const { data: ppRows, error: ppErr } = await supabase
         .from("partner_profiles")
-        .select("user_id, username, branch, full_name")
-        .eq("status", "active");
-      if (cancelled || !data) return;
-      setPartnerList(data as any);
+        .select("user_id, username, branch, status");
+      if (ppErr) console.warn("[ParcelManagement] partner_profiles fetch error:", ppErr.message);
+      const ppMap: Record<string, { username?: string | null; branch?: string | null; status?: string | null }> = {};
+      (ppRows || []).forEach((r: any) => {
+        ppMap[r.user_id] = { username: r.username, branch: r.branch, status: r.status };
+      });
+      // 3) Email lookup via auth admin (best-effort; falls back gracefully)
+      let emailMap: Record<string, string> = {};
+      try {
+        const { data: { users: au } } = await supabase.auth.admin.listUsers();
+        if (au) {
+          au.forEach((u: any) => {
+            if (u.id && u.email) emailMap[u.id] = u.email;
+          });
+        }
+      } catch (_) { /* ignore — partners still listed, just without email */ }
+
+      const merged = profiles.map((p: any) => ({
+        user_id:  p.user_id,
+        full_name: p.full_name || null,
+        email:    emailMap[p.user_id] || null,
+        username: ppMap[p.user_id]?.username || null,
+        branch:   ppMap[p.user_id]?.branch   || null,
+        status:   ppMap[p.user_id]?.status   || null,
+      }));
+      if (cancelled) return;
+      setPartnerList(merged);
     })();
     return () => { cancelled = true; };
   }, [isAdminUser]);
@@ -474,7 +521,11 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
     setAssigning(true);
     try {
       const partner = partnerList.find((p) => p.user_id === assignPartnerId);
-      const partnerName = partner?.full_name || partner?.username || partner?.branch || "Partner";
+      const partnerName =
+        partner?.full_name ||
+        partner?.username ||
+        partner?.branch ||
+        (partner?.email ? partner.email.split("@")[0] : "Partner");
       const { error } = await supabase
         .from("parcels")
         .update({ created_by: assignPartnerId, created_by_name: partnerName })
@@ -1478,17 +1529,34 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                   <SelectContent className="max-h-72">
                     {partnerList.length === 0 ? (
                       <div className="px-3 py-4 text-center text-xs text-slate-500">
-                        No active partners found.
+                        No partners found. Assign a user the 'partner' role on the Partners page first.
                       </div>
                     ) : (
                       partnerList.map((p) => {
-                        const label = p.full_name || p.username || p.branch || `Partner ${p.user_id.slice(-6)}`;
-                        const sub = [p.username, p.branch].filter(Boolean).join(" · ");
+                        // Display priority: full_name → username → branch → email prefix
+                        const label =
+                          p.full_name ||
+                          p.username ||
+                          p.branch ||
+                          (p.email ? p.email.split("@")[0] : `Partner ${p.user_id.slice(-6)}`);
+                        const subParts: string[] = [];
+                        if (p.full_name && p.username) subParts.push(`@${p.username}`);
+                        if (p.branch) subParts.push(p.branch);
+                        if (p.email) subParts.push(p.email);
+                        const sub = subParts.join(" · ");
+                        const isSuspended = (p.status || "").toLowerCase() === "suspended";
                         return (
                           <SelectItem key={p.user_id} value={p.user_id} className="py-2">
-                            <div className="flex flex-col">
-                              <span className="font-semibold text-sm">{label}</span>
-                              {sub && <span className="text-[10px] text-slate-500">{sub}</span>}
+                            <div className="flex flex-col min-w-0">
+                              <span className="font-semibold text-sm flex items-center gap-1.5">
+                                {label}
+                                {isSuspended && (
+                                  <span className="text-[9px] font-bold uppercase rounded px-1 py-0.5 bg-amber-100 text-amber-700 border border-amber-200">
+                                    Suspended
+                                  </span>
+                                )}
+                              </span>
+                              {sub && <span className="text-[10px] text-slate-500 truncate">{sub}</span>}
                             </div>
                           </SelectItem>
                         );
