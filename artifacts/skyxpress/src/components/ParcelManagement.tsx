@@ -265,9 +265,13 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
     }
   };
 
-  // ── Current auth user (for stamping manifests) ─────────────────────────
+  // ── Current auth user (for stamping manifests + assignments) ────────────
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
+  // Display name of the logged-in admin — resolved once on mount from
+  // profiles.full_name (falls back to email). Used as the "Assigned by"
+  // stamp when an admin reassigns a parcel to a partner.
+  const [currentUserDisplayName, setCurrentUserDisplayName] = useState<string | null>(null);
   // ── ROLE-BASED PERMISSIONS (enforced by logged-in role) ────────────────────
   //   admin  : full access — view / edit / email / delete
   //   staff  : view / edit / email — CANNOT delete parcels
@@ -279,8 +283,9 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
       const u = data?.session?.user;
       if (u) {
         setCurrentUserId(u.id); setCurrentUserEmail(u.email ?? null);
-        const { data: prof } = await supabase.from("profiles").select("role").eq("user_id", u.id).single();
+        const { data: prof } = await supabase.from("profiles").select("role, full_name").eq("user_id", u.id).single();
         setCurrentUserRole(prof?.role ?? null);
+        setCurrentUserDisplayName(prof?.full_name || u.email || "Admin");
       }
     });
   }, []);
@@ -526,17 +531,87 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
         partner?.username ||
         partner?.branch ||
         (partner?.email ? partner.email.split("@")[0] : "Partner");
-      const { error } = await supabase
+      // Stamp the admin who did the assignment so the row can show
+      // "Assigned by <AdminName>" alongside the existing "Created by" pill.
+      const assignedById   = currentUserId || null;
+      const assignedByName = currentUserDisplayName || currentUserEmail || "Admin";
+      const assignedAt     = new Date().toISOString();
+
+      // ── RESILIENT UPDATE ────────────────────────────────────────────────
+      // Try the full update first (with assigned_by* columns). If the SQL
+      // migration hasn't been run yet (columns don't exist), Supabase
+      // returns an error like "column assigned_by_name of relation parcels
+      // does not exist". In that case, fall back to a minimal update with
+      // just created_by + created_by_name so the assignment still works.
+      // We ALSO store the admin's name in admin_note as a fallback so the
+      // partner can see who assigned it even without the SQL migration.
+      const fullPayload = {
+        created_by: assignPartnerId,
+        created_by_name: partnerName,
+        assigned_by: assignedById,
+        assigned_by_name: assignedByName,
+        assigned_at: assignedAt,
+        admin_note: `Assigned by ${assignedByName} on ${new Date().toLocaleString()}`,
+      };
+      const minimalPayload = {
+        created_by: assignPartnerId,
+        created_by_name: partnerName,
+        admin_note: `Assigned by ${assignedByName} on ${new Date().toLocaleString()}`,
+      };
+
+      let updateError: any = null;
+      let usedFullUpdate = true;
+
+      // Try full update first
+      const fullResult = await supabase
         .from("parcels")
-        .update({ created_by: assignPartnerId, created_by_name: partnerName })
+        .update(fullPayload)
         .eq("id", assignParcel.id);
-      if (error) throw error;
-      // Refresh the local list so the new creator name + role badge show up
+      updateError = fullResult.error;
+
+      // If the full update failed because assigned_by* columns don't exist,
+      // fall back to the minimal update
+      if (updateError && updateError.message && updateError.message.includes("assigned_by")) {
+        console.warn("[ParcelManagement] assigned_by* columns missing — falling back to minimal update. Run the SQL migration to enable 'Assigned by' tracking.");
+        const minimalResult = await supabase
+          .from("parcels")
+          .update(minimalPayload)
+          .eq("id", assignParcel.id);
+        updateError = minimalResult.error;
+        usedFullUpdate = false;
+      }
+
+      if (updateError) throw updateError;
+
+      // Refresh the local list so the new creator name + assigned-by stamp
+      // show up immediately without needing a refetch.
       setAllParcels((prev) => prev.map((p) => p.id === assignParcel.id
-        ? { ...p, created_by: assignPartnerId, created_by_name: partnerName }
+        ? {
+          ...p,
+          created_by: assignPartnerId,
+          created_by_name: partnerName,
+          ...(usedFullUpdate
+            ? {
+                assigned_by: assignedById,
+                assigned_by_name: assignedByName,
+                assigned_at: assignedAt,
+              }
+            : {}
+          ),
+          admin_note: `Assigned by ${assignedByName} on ${new Date().toLocaleString()}`,
+        }
         : p
       ));
-      toast({ title: "Parcel assigned ✓", description: `${assignParcel.tracking_id} → ${partnerName}` });
+
+      if (usedFullUpdate) {
+        toast({ title: "Parcel assigned ✓", description: `${assignParcel.tracking_id} → ${partnerName} · by ${assignedByName}` });
+      } else {
+        toast({
+          title: "Parcel assigned ✓ (limited)",
+          description: `${assignParcel.tracking_id} → ${partnerName}. Run the SQL migration to show "Assigned by" on the partner dashboard.`,
+          variant: "default",
+        });
+      }
       closeAssignDialog();
     } catch (e: any) {
       toast({ title: "Assign failed", description: e.message || "Could not reassign parcel", variant: "destructive" });
@@ -1110,6 +1185,40 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               </div>
                             );
                           })()}
+                          {/* ASSIGNED BY: when an admin has assigned / reassigned
+                              this parcel, show "Assigned by AdminName" with a
+                              small date stamp. Hidden for parcels that were
+                              never assigned (older parcels pre-feature). */}
+                          {(() => {
+                            // Fall back to admin_note ("Assigned by AdminName on ...")
+                            // if the dedicated assigned_by_name column is empty
+                            // (happens when the SQL migration hasn't been run yet).
+                            const adminNote = parcel.admin_note || "";
+                            const isAssignNote = adminNote.startsWith("Assigned by ");
+                            const fallbackName = isAssignNote
+                              ? adminNote.replace(/^Assigned by (\S+.*?)\s+on\s+.*$/, "$1")
+                              : null;
+                            const displayName = parcel.assigned_by_name || fallbackName;
+                            if (!displayName) return null;
+                            return (
+                              <div className="mt-1 flex items-center gap-1 flex-wrap max-w-full">
+                                <span
+                                  className="text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 inline-flex items-center gap-1 min-w-0"
+                                  title={`Assigned by ${displayName}${parcel.assigned_at ? " on " + new Date(parcel.assigned_at).toLocaleString() : ""}`}
+                                >
+                                  <UserPlus className="h-2.5 w-2.5 shrink-0 opacity-70" />
+                                  <span className="font-bold uppercase tracking-wide opacity-80 shrink-0">Assigned by</span>
+                                  <span className="text-slate-400 opacity-60 shrink-0">/</span>
+                                  <span className="text-slate-800 font-semibold truncate min-w-0">{displayName}</span>
+                                </span>
+                                {parcel.assigned_at && (
+                                  <span className="text-[9px] text-slate-400">
+                                    {new Date(parcel.assigned_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </TableCell>
                         <TableCell className="py-2.5 pr-2">
                           <Badge className={`text-[10px] px-1.5 py-0.5 whitespace-nowrap ${statusColors[parcel.current_status] || "bg-gray-100 text-gray-800"}`}>
@@ -1325,6 +1434,34 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                                   <UserPlus className="h-3 w-3" />
                                 </Button>
                               )}
+                              {/* ASSIGNED BY (mobile): same pill, smaller */}
+                              {(() => {
+                                const adminNote = parcel.admin_note || "";
+                                const isAssignNote = adminNote.startsWith("Assigned by ");
+                                const fallbackName = isAssignNote
+                                  ? adminNote.replace(/^Assigned by (\S+.*?)\s+on\s+.*$/, "$1")
+                                  : null;
+                                const displayName = parcel.assigned_by_name || fallbackName;
+                                if (!displayName) return null;
+                                return (
+                                  <div className="mt-0.5 flex items-center gap-1 flex-wrap">
+                                    <span
+                                      className="text-[10px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 inline-flex items-center gap-1 min-w-0"
+                                      title={`Assigned by ${displayName}${parcel.assigned_at ? " on " + new Date(parcel.assigned_at).toLocaleString() : ""}`}
+                                    >
+                                      <UserPlus className="h-2.5 w-2.5 shrink-0 opacity-70" />
+                                      <span className="font-bold uppercase tracking-wide opacity-80 shrink-0">Assigned by</span>
+                                      <span className="text-slate-400 opacity-60 shrink-0">/</span>
+                                      <span className="text-slate-800 font-semibold truncate min-w-0">{displayName}</span>
+                                    </span>
+                                    {parcel.assigned_at && (
+                                      <span className="text-[9px] text-slate-400">
+                                        {new Date(parcel.assigned_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short" })}
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                             </div>
                           );
                         })()}
@@ -1568,6 +1705,11 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                   The selected partner will become this parcel's creator — the parcel
                   will appear on their dashboard and they will be able to manage it.
                 </p>
+                {currentUserDisplayName && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                    Assigning as: <strong>{currentUserDisplayName}</strong>
+                  </p>
+                )}
               </div>
 
               <div className="flex gap-2 justify-end pt-1">
