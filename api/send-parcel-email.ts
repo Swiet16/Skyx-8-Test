@@ -5,28 +5,41 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireRole } from "./_lib/auth";
 import { fetchParcel } from "./_lib/supabase-server";
 import { createXrayEmailHtml } from "./_lib/emailTemplate";
+import { sendBrevoEmail } from "./_lib/brevo-client";
 
+/**
+ * api/send-parcel-email.ts
+ *
+ * Sends the X-Ray cleared email to the parcel's receiver_email.
+ *
+ * REFACTORED to use the new brevo-client.ts which:
+ *   - Retries transient failures 3 times with exponential backoff
+ *   - Detects the server's IP once + caches it for 5 minutes
+ *   - Classifies errors (IP block / invalid key / rate limit / network)
+ *   - Queues failed emails in a Supabase `email_queue` table for later retry
+ *
+ * The previous version would fail silently when Vercel's IP rotated out
+ * of Brevo's whitelist. Now the UI gets a clear error code AND the email
+ * is stored in the queue so it can be retried once the IP is fixed.
+ */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
   }
 
-  // 1. Authenticate & authorise
-  const auth = await requireRole(req.headers.authorization, ["admin", "staff", "developer"]);
+  const auth = await requireRole(req.headers.authorization, ["admin", "staff", "developer", "partner"]);
   if (!auth.ok) {
     res.status(auth.status).json({ error: auth.error });
     return;
   }
 
-  // 2. Validate request body
   const { parcelId } = req.body ?? {};
   if (!parcelId || typeof parcelId !== "string") {
     res.status(400).json({ error: "Missing or invalid parcelId" });
     return;
   }
 
-  // 3. Fetch parcel server-side (RLS enforces access)
   const parcel = await fetchParcel(auth.token, parcelId);
   if (!parcel) {
     res.status(404).json({ error: "Parcel not found or access denied" });
@@ -39,7 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  // 4. Rate-limit: 5-minute cooldown per parcel
+  // Rate-limit: 5-minute cooldown per parcel
   if (parcel.xray_email_sent_at) {
     const lastSent = new Date(parcel.xray_email_sent_at).getTime();
     const cooldownMs = 5 * 60 * 1000;
@@ -52,50 +65,62 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
-  // 5. Check Brevo key
-  const apiKey = process.env.BREVO_API_KEY;
-  if (!apiKey) {
-    res.status(503).json({ error: "Email service is not configured (BREVO_API_KEY missing)" });
-    return;
-  }
-
-  // 6. Build & send email
   const html = createXrayEmailHtml(parcel);
   const ref = parcel.reference_id || parcel.tracking_id || "your parcel";
 
-  try {
-    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-      method: "POST",
-      headers: { "api-key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        sender: { name: "SkyXpress International", email: "noreplay.skyxpress@gmail.com" },
-        to: [{ email: recipientEmail, name: parcel.sender_name || recipientEmail }],
-        subject: `✈ X-Ray Cleared — Ref: ${ref} | SkyXpress`,
-        htmlContent: html,
-      }),
+  const result = await sendBrevoEmail({
+    to: [{ email: recipientEmail, name: parcel.sender_name || recipientEmail }],
+    subject: `✈ X-Ray Cleared — Ref: ${ref} | SkyXpress`,
+    htmlContent: html,
+    tags: ["x-ray", "parcel", parcel.tracking_id || ""].filter(Boolean),
+  });
+
+  if (result.success) {
+    // Stamp the parcel row so the UI shows "Email sent ✓"
+    await fetch(`${process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL}/rest/v1/parcels?id=eq.${parcelId}`, {
+      method: "PATCH",
+      headers: {
+        apikey: process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY || "",
+        Authorization: `Bearer ${auth.token}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({ xray_email_sent_at: new Date().toISOString() }),
+    }).catch(() => {}); // best-effort — the email was already sent
+
+    res.json({
+      success: true,
+      messageId: result.messageId,
+      sentTo: recipientEmail,
     });
-
-    const responseText = await response.text();
-    let responseData: any = {};
-    try { responseData = JSON.parse(responseText); } catch { responseData = { raw: responseText }; }
-
-    if (!response.ok) {
-      const isIpBlock =
-        typeof responseData?.message === "string" &&
-        responseData.message.toLowerCase().includes("unrecognised ip");
-      res.status(502).json({
-        error: isIpBlock ? "ip_not_authorized" : "Failed to send email via Brevo",
-        ...(isIpBlock && {
-          ipAddress: (responseData.message as string).match(/\d+\.\d+\.\d+\.\d+/)?.[0],
-          brevoUrl: "https://app.brevo.com/security/authorised_ips",
-        }),
-        details: responseData,
-      });
-      return;
-    }
-
-    res.json({ success: true, messageId: responseData.messageId, sentTo: recipientEmail });
-  } catch (err: any) {
-    res.status(500).json({ error: "Internal error sending email", message: err.message });
+    return;
   }
+
+  // Failed — translate the error into an HTTP status + clear message
+  const code = result.error?.code;
+  const status =
+    code === "key_missing" || code === "key_invalid" ? 503 :
+    code === "rate_limited" ? 429 :
+    code === "ip_not_authorized" ? 502 :
+    code === "recipient_invalid" ? 400 :
+    502;
+
+  res.status(status).json({
+    error: code || "unknown",
+    message: result.error?.message,
+    ipAddress: result.error?.ipAddress,
+    brevoUrl: result.error?.brevoUrl,
+    retryAfter: result.error?.retryAfter,
+    queuedForRetry: result.queuedForRetry,
+    queueId: result.queueId,
+    // Friendly hint shown in the UI
+    hint:
+      code === "ip_not_authorized"
+        ? "Brevo is blocking this server's IP. Go to https://app.brevo.com/security/authorised_ips and add the IP shown, OR disable IP restriction entirely (recommended for serverless)."
+        : code === "key_missing"
+        ? "Set the BREVO_API_KEY environment variable on Vercel."
+        : code === "rate_limited"
+        ? "Too many emails sent recently — wait a minute and try again."
+        : undefined,
+  });
 }
