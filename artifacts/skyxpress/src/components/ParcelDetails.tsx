@@ -338,14 +338,51 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
 
     setUpdatingStatus(true);
     try {
-      // Use the enhanced status update function
-      const { data, error } = await supabase.rpc('update_parcel_status_enhanced', {
-        parcel_id_param: parcel.id,
-        new_status: selectedStatus,
-        location_param: statusLocation,
-        comment_param: adminComment,
-        custom_datetime: new Date(statusDateTime).toISOString()
-      });
+      // ── DIRECT UPDATE (RLS-respecting) ─────────────────────────────────
+      // Previously this used an RPC (update_parcel_status_enhanced) which
+      // was failing for partners — either the function didn't exist or it
+      // had an internal role gate that rejected non-admin/staff users.
+      //
+      // We now do a direct supabase.from('parcels').update(...) which
+      // goes through RLS. Partners can update their own parcels thanks
+      // to the own_parcels_update policy (created_by = auth.uid()).
+      //
+      // Build the patch with the new status + timestamp + optional
+      // comment + location + a new status_timeline event.
+      const nowIso = new Date(statusDateTime).toISOString();
+      const newEvent = {
+        status: selectedStatus,
+        timestamp: nowIso,
+        location: statusLocation || "",
+        notes: adminComment || "",
+      };
+
+      // Fetch existing timeline so we can append (not overwrite)
+      const { data: existing } = await supabase
+        .from('parcels')
+        .select('status_timeline')
+        .eq('id', parcel.id)
+        .single();
+      const existingTimeline = Array.isArray(existing?.status_timeline) ? existing.status_timeline : [];
+
+      const patch: Record<string, any> = {
+        current_status: selectedStatus,
+        updated_at: new Date().toISOString(),
+        status_timeline: [...existingTimeline, newEvent],
+      };
+      if (statusLocation) {
+        patch.current_location = statusLocation;
+        patch.last_location = statusLocation;
+      }
+      if (adminComment) {
+        patch.admin_note = adminComment;
+        patch.status_notes = adminComment;
+      }
+
+      const { error } = await supabase
+        .from('parcels')
+        .update(patch)
+        .eq('id', parcel.id);
 
       if (error) throw error;
 
