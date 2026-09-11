@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Package, User, MapPin, Clock, Truck, CheckCircle, Plane, AlertCircle, Pencil, Save, X, Mail, ScanLine } from "lucide-react";
+import { Package, User, MapPin, Clock, Truck, CheckCircle, Plane, AlertCircle, Pencil, Save, X, Mail, ScanLine, UserPlus } from "lucide-react";
 import { BillDownloader } from "./BillDownloader";
 
 interface ParcelDetailsProps {
@@ -131,6 +131,26 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
 
   const creatorName = creator?.full_name || parcel?.created_by_name || parcel?.made_by_name || null;
   const creatorRole = creator?.role || null;
+
+  // ── ASSIGNED BY: resolve the assigner's role (if an admin assigned this
+  // parcel to the current partner). We look up the assigner's profile so
+  // we can show their role badge next to their name.
+  const [assigner, setAssigner] = useState<{ full_name?: string | null; role?: string | null } | null>(null);
+  useEffect(() => {
+    if (!parcel?.assigned_by) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("user_id, full_name, role")
+        .eq("user_id", parcel.assigned_by)
+        .single();
+      if (!cancelled) setAssigner(data || null);
+    })();
+    return () => { cancelled = true; };
+  }, [parcel?.assigned_by]);
+  const assignerName = assigner?.full_name || parcel?.assigned_by_name || null;
+  const assignerRole = assigner?.role || null;
 
   // Local overrides so edits made here show immediately without waiting on the
   // parent list refetch (the parent doesn't re-pass a fresh `parcel` prop into
@@ -385,6 +405,34 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
                       : "text-red-700 bg-red-50 border-red-200"
                 }`}>
                   {creatorRole}
+                </span>
+              )}
+            </div>
+          )}
+          {/* ASSIGNED BY: when an admin has assigned / reassigned this parcel,
+              show "Assigned by AdminName" with the assigner's role badge +
+              date stamp. This is critical for partners — it's how they know
+              an admin put this parcel on their dashboard. */}
+          {assignerName && (
+            <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                <UserPlus className="h-3 w-3" />
+                Assigned by {assignerName}
+              </span>
+              {assignerRole && (
+                <span className={`text-[9px] font-bold uppercase tracking-wide rounded px-1.5 py-0.5 border ${
+                  assignerRole === "partner"
+                    ? "text-purple-700 bg-purple-50 border-purple-200"
+                    : assignerRole === "staff"
+                      ? "text-blue-700 bg-blue-50 border-blue-200"
+                      : "text-red-700 bg-red-50 border-red-200"
+                }`}>
+                  {assignerRole}
+                </span>
+              )}
+              {parcel?.assigned_at && (
+                <span className="text-[10px] text-slate-400">
+                  {new Date(parcel.assigned_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
                 </span>
               )}
             </div>
