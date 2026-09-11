@@ -46,7 +46,12 @@ import {
   Copy,
   Check,
   CopyPlus,
+  UserPlus,
+  X,
 } from "lucide-react";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { ParcelForm } from "./ParcelForm";
 import { ParcelDetails } from "./ParcelDetails";
 import { ParcelAttachmentsDialog } from "./ParcelAttachments";
@@ -428,6 +433,65 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
     const name = prof?.full_name || parcel.created_by_name || parcel.made_by_name || null;
     const role = prof?.role || null;
     return { name, role, isPartner: role === "partner" };
+  };
+
+  // ── PARTNER LIST: fetched once for the admin "Assign to Partner" dialog. ──
+  // Mirrors the lookup that ManifestStock uses so the same partner_profiles
+  // rows drive both UIs. Only fetched for admins.
+  const [partnerList, setPartnerList] = useState<Array<{ user_id: string; username: string | null; branch: string | null; full_name: string | null }>>([]);
+  useEffect(() => {
+    if (!isAdminUser) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase
+        .from("partner_profiles")
+        .select("user_id, username, branch, full_name")
+        .eq("status", "active");
+      if (cancelled || !data) return;
+      setPartnerList(data as any);
+    })();
+    return () => { cancelled = true; };
+  }, [isAdminUser]);
+
+  // ── ASSIGN PARCEL TO PARTNER (admin only) ──────────────────────────────────
+  // Admin can reassign a parcel's `created_by` to any joined partner, so the
+  // parcel shows up on that partner's dashboard. Partners themselves cannot
+  // do this — the Assign button is gated by `isAdminUser`.
+  const [assignParcel, setAssignParcel] = useState<any | null>(null);
+  const [assignPartnerId, setAssignPartnerId] = useState<string>("");
+  const [assigning, setAssigning] = useState(false);
+
+  const openAssignDialog = (parcel: any) => {
+    setAssignParcel(parcel);
+    setAssignPartnerId(parcel.created_by || "");
+  };
+  const closeAssignDialog = () => {
+    setAssignParcel(null);
+    setAssignPartnerId("");
+  };
+  const handleAssignToPartner = async () => {
+    if (!assignParcel || !assignPartnerId) return;
+    setAssigning(true);
+    try {
+      const partner = partnerList.find((p) => p.user_id === assignPartnerId);
+      const partnerName = partner?.full_name || partner?.username || partner?.branch || "Partner";
+      const { error } = await supabase
+        .from("parcels")
+        .update({ created_by: assignPartnerId, created_by_name: partnerName })
+        .eq("id", assignParcel.id);
+      if (error) throw error;
+      // Refresh the local list so the new creator name + role badge show up
+      setAllParcels((prev) => prev.map((p) => p.id === assignParcel.id
+        ? { ...p, created_by: assignPartnerId, created_by_name: partnerName }
+        : p
+      ));
+      toast({ title: "Parcel assigned ✓", description: `${assignParcel.tracking_id} → ${partnerName}` });
+      closeAssignDialog();
+    } catch (e: any) {
+      toast({ title: "Assign failed", description: e.message || "Could not reassign parcel", variant: "destructive" });
+    } finally {
+      setAssigning(false);
+    }
   };
 
   // parcels reference for selection helpers (full filtered list)
@@ -955,31 +1019,42 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               {parcel.branch || parcel.made_by_name}
                             </div>
                           )}
-                          {/* CREATED BY: show the creator's name + login role
-                              (partner parcels show the partner's name) */}
+                          {/* CREATED BY: combined role + name in a single pill so it
+                              never crops and always reads as "Admin / John Smith"
+                              or "Partner / Jane Doe" etc. Admins also get an
+                              "Assign to partner" button to reassign the parcel. */}
                           {(() => {
                             const { name: creatorName, role: creatorRole } = getCreatorInfo(parcel);
                             if (!creatorName && !creatorRole) return null;
+                            const roleLabel = (creatorRole || "user").toLowerCase();
+                            const roleColor =
+                              roleLabel === "partner" ? "text-purple-700 bg-purple-50 border-purple-200"
+                              : roleLabel === "staff" ? "text-blue-700 bg-blue-50 border-blue-200"
+                              : roleLabel === "admin" ? "text-red-700 bg-red-50 border-red-200"
+                              : "text-slate-700 bg-slate-50 border-slate-200";
+                            const fullName = creatorName || "Unknown";
+                            const tooltip = `Created by ${roleLabel === "admin" ? "Admin" : roleLabel === "staff" ? "Staff" : "Partner"} / ${fullName}`;
                             return (
                               <div className="mt-1 flex items-center gap-1 flex-wrap max-w-full">
-                                {creatorName && (
-                                  <span
-                                    className="text-[10px] font-semibold text-slate-700 bg-slate-100 border border-slate-200 rounded px-1 py-0.5 inline-flex items-center gap-1 min-w-0"
-                                    title={`Created by ${creatorName}`}
+                                <span
+                                  className={`text-[10px] font-semibold border rounded px-1.5 py-0.5 inline-flex items-center gap-1 min-w-0 ${roleColor}`}
+                                  title={tooltip}
+                                >
+                                  <span className="font-bold uppercase tracking-wide opacity-80 shrink-0">
+                                    {roleLabel === "admin" ? "Admin" : roleLabel === "staff" ? "Staff" : "Partner"}
+                                  </span>
+                                  <span className="text-slate-400 opacity-60 shrink-0">/</span>
+                                  <span className="text-slate-800 font-semibold truncate min-w-0">{fullName}</span>
+                                </span>
+                                {isAdminUser && (
+                                  <Button
+                                    variant="ghost" size="icon"
+                                    className="h-5 w-5 p-0 shrink-0 text-slate-400 hover:text-amber-600 hover:bg-amber-50"
+                                    onClick={(e) => { e.stopPropagation(); openAssignDialog(parcel); }}
+                                    title="Assign / reassign to partner"
                                   >
-                                    <span className="truncate">Created by {creatorName}</span>
-                                  </span>
-                                )}
-                                {creatorRole && (
-                                  <span className={`text-[9px] font-bold uppercase tracking-wide rounded px-1 py-0.5 border ${
-                                    creatorRole === "partner"
-                                      ? "text-purple-700 bg-purple-50 border-purple-200"
-                                      : creatorRole === "staff"
-                                        ? "text-blue-700 bg-blue-50 border-blue-200"
-                                        : "text-red-700 bg-red-50 border-red-200"
-                                  }`}>
-                                    {creatorRole}
-                                  </span>
+                                    <UserPlus className="h-3 w-3" />
+                                  </Button>
                                 )}
                               </div>
                             );
@@ -1165,27 +1240,39 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                         {(parcel.branch || parcel.made_by_name) && (
                           <p className="text-[10px] font-semibold text-sky-700 truncate">{parcel.branch || parcel.made_by_name}</p>
                         )}
-                        {/* CREATED BY (mobile): creator name + role badge */}
+                        {/* CREATED BY (mobile): same combined role / name pill */}
                         {(() => {
                           const { name: creatorName, role: creatorRole } = getCreatorInfo(parcel);
                           if (!creatorName && !creatorRole) return null;
+                          const roleLabel = (creatorRole || "user").toLowerCase();
+                          const roleColor =
+                            roleLabel === "partner" ? "text-purple-700 bg-purple-50 border-purple-200"
+                            : roleLabel === "staff" ? "text-blue-700 bg-blue-50 border-blue-200"
+                            : roleLabel === "admin" ? "text-red-700 bg-red-50 border-red-200"
+                            : "text-slate-700 bg-slate-50 border-slate-200";
+                          const fullName = creatorName || "Unknown";
+                          const tooltip = `Created by ${roleLabel === "admin" ? "Admin" : roleLabel === "staff" ? "Staff" : "Partner"} / ${fullName}`;
                           return (
                             <div className="mt-0.5 flex items-center gap-1 flex-wrap">
-                              {creatorName && (
-                                <p className="text-[10px] font-semibold text-slate-600 truncate max-w-full">
-                                  Created by {creatorName}
-                                </p>
-                              )}
-                              {creatorRole && (
-                                <span className={`text-[8px] font-bold uppercase tracking-wide rounded px-1 py-0.5 border ${
-                                  creatorRole === "partner"
-                                    ? "text-purple-700 bg-purple-50 border-purple-200"
-                                    : creatorRole === "staff"
-                                      ? "text-blue-700 bg-blue-50 border-blue-200"
-                                      : "text-red-700 bg-red-50 border-red-200"
-                                }`}>
-                                  {creatorRole}
+                              <span
+                                className={`text-[10px] font-semibold border rounded px-1.5 py-0.5 inline-flex items-center gap-1 min-w-0 ${roleColor}`}
+                                title={tooltip}
+                              >
+                                <span className="font-bold uppercase tracking-wide opacity-80 shrink-0">
+                                  {roleLabel === "admin" ? "Admin" : roleLabel === "staff" ? "Staff" : "Partner"}
                                 </span>
+                                <span className="text-slate-400 opacity-60 shrink-0">/</span>
+                                <span className="text-slate-800 font-semibold truncate min-w-0">{fullName}</span>
+                              </span>
+                              {isAdminUser && (
+                                <Button
+                                  variant="ghost" size="icon"
+                                  className="h-5 w-5 p-0 shrink-0 text-slate-400 hover:text-amber-600 hover:bg-amber-50"
+                                  onClick={(e) => { e.stopPropagation(); openAssignDialog(parcel); }}
+                                  title="Assign / reassign to partner"
+                                >
+                                  <UserPlus className="h-3 w-3" />
+                                </Button>
                               )}
                             </div>
                           );
@@ -1342,6 +1429,98 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
         <DialogContent className="w-full max-w-4xl max-h-[90vh] overflow-y-auto overflow-x-hidden bg-[#0b0d1a] border border-white/10 text-white p-0 [&>button]:text-white/50 [&>button]:hover:text-white [&>button]:top-3 [&>button]:right-3">
           <DialogHeader className="sr-only"><DialogTitle>Edit Parcel — {editingParcel?.tracking_id}</DialogTitle></DialogHeader>
           {editingParcel && <ParcelForm parcel={editingParcel} onSuccess={handleParcelUpdated} lockIdentifiers={!isAdminUser} lockAddress={!isAdminUser} />}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── ASSIGN PARCEL TO PARTNER (admin only) ───────────────────────── */}
+      <Dialog open={!!assignParcel} onOpenChange={(o) => { if (!o) closeAssignDialog(); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="h-5 w-5 text-amber-600" />
+              Assign Parcel to Partner
+            </DialogTitle>
+          </DialogHeader>
+          {assignParcel && (
+            <div className="space-y-4 py-2">
+              <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2.5 space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Tracking ID</span>
+                  <span className="font-mono font-bold text-blue-600 text-sm">{assignParcel.tracking_id}</span>
+                </div>
+                {assignParcel.reference_id && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Reference</span>
+                    <span className="font-mono text-xs text-slate-700">{assignParcel.reference_id}</span>
+                  </div>
+                )}
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Current creator</span>
+                  <span className="text-xs text-slate-700 font-semibold truncate max-w-[60%] text-right">
+                    {(() => {
+                      const { name, role } = getCreatorInfo(assignParcel);
+                      const r = (role || "user").toLowerCase();
+                      const rLabel = r === "admin" ? "Admin" : r === "staff" ? "Staff" : "Partner";
+                      return name ? `${rLabel} / ${name}` : "—";
+                    })()}
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[11px] font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1">
+                  <UserPlus className="h-3.5 w-3.5 text-amber-600" /> Select partner
+                </label>
+                <Select value={assignPartnerId} onValueChange={setAssignPartnerId}>
+                  <SelectTrigger className="h-10 w-full text-sm border-slate-300 bg-white">
+                    <SelectValue placeholder="— Choose a partner —" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-72">
+                    {partnerList.length === 0 ? (
+                      <div className="px-3 py-4 text-center text-xs text-slate-500">
+                        No active partners found.
+                      </div>
+                    ) : (
+                      partnerList.map((p) => {
+                        const label = p.full_name || p.username || p.branch || `Partner ${p.user_id.slice(-6)}`;
+                        const sub = [p.username, p.branch].filter(Boolean).join(" · ");
+                        return (
+                          <SelectItem key={p.user_id} value={p.user_id} className="py-2">
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-sm">{label}</span>
+                              {sub && <span className="text-[10px] text-slate-500">{sub}</span>}
+                            </div>
+                          </SelectItem>
+                        );
+                      })
+                    )}
+                  </SelectContent>
+                </Select>
+                <p className="text-[11px] text-slate-500">
+                  The selected partner will become this parcel's creator — the parcel
+                  will appear on their dashboard and they will be able to manage it.
+                </p>
+              </div>
+
+              <div className="flex gap-2 justify-end pt-1">
+                <Button variant="outline" size="sm" onClick={closeAssignDialog} disabled={assigning}>
+                  <X className="h-3.5 w-3.5" /> Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="bg-amber-600 hover:bg-amber-700 text-white gap-1.5"
+                  disabled={!assignPartnerId || assigning}
+                  onClick={handleAssignToPartner}
+                >
+                  {assigning
+                    ? <span className="animate-spin h-3.5 w-3.5 border-2 border-white/40 border-t-white rounded-full inline-block" />
+                    : <UserPlus className="h-3.5 w-3.5" />
+                  }
+                  Assign Parcel
+                </Button>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
