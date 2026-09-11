@@ -290,17 +290,126 @@ function csvToParcel(row: string[], headers: string[]): any {
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
-function ManifestStatusBadge({ status, size = "sm" }: { status?: string; size?: "sm" | "xs" }) {
+// ── Status "Updated by" info bubble ────────────────────────────────────────────
+// Renders a small ℹ icon next to a status badge. On hover/click, a popover
+// shows who last updated the status (admin / partner name + role + timestamp).
+// Used everywhere a ManifestStatusBadge appears: manifest list rows, manifest
+// detail status picker, AWBs table, parcel details.
+function StatusUpdatedByBubble({
+  updatedByName,
+  updatedByRole,
+  updatedAt,
+  size = "xs",
+}: {
+  updatedByName?: string | null;
+  updatedByRole?: string | null;
+  updatedAt?: string | null;
+  size?: "xs" | "sm";
+}) {
+  const [open, setOpen] = useState(false);
+  // Nothing to show — render nothing so the badge stays compact
+  if (!updatedByName && !updatedAt) return null;
+  const roleLabel = (updatedByRole || "user").toLowerCase();
+  const roleColor =
+    roleLabel === "admin" ? "text-red-700 bg-red-50 border-red-200"
+    : roleLabel === "staff" ? "text-blue-700 bg-blue-50 border-blue-200"
+    : roleLabel === "partner" ? "text-purple-700 bg-purple-50 border-purple-200"
+    : "text-slate-700 bg-slate-50 border-slate-200";
+  const formattedTime = updatedAt
+    ? new Date(updatedAt).toLocaleString(undefined, {
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit",
+      })
+    : null;
+  const dim = size === "xs" ? "h-3 w-3" : "h-3.5 w-3.5";
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+          title={updatedByName ? `Updated by ${updatedByName}${formattedTime ? " on " + formattedTime : ""}` : undefined}
+          className="inline-flex items-center justify-center rounded-full text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+            className={dim}
+            strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-0 z-[9999]" align="start">
+        <div className="bg-gradient-to-r from-slate-900 to-blue-900 px-3 py-2 rounded-t-md">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-blue-300">Status Update</p>
+          <p className="text-white text-xs font-semibold mt-0.5">Last updated by</p>
+        </div>
+        <div className="p-3 space-y-2">
+          {updatedByName ? (
+            <div className="flex items-center gap-2">
+              <div className="rounded-full p-1.5 bg-slate-100 text-slate-600">
+                <User className="h-3 w-3" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-slate-800 truncate">{updatedByName}</p>
+                {updatedByRole && (
+                  <span className={`text-[9px] font-bold uppercase tracking-wide rounded px-1 py-0.5 border ${roleColor}`}>
+                    {roleLabel === "admin" ? "Admin" : roleLabel === "staff" ? "Staff" : "Partner"}
+                  </span>
+                )}
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-slate-500 italic">Unknown updater</p>
+          )}
+          {formattedTime && (
+            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 pt-1 border-t border-slate-100">
+              <Clock className="h-3 w-3" />
+              {formattedTime}
+            </div>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function ManifestStatusBadge({
+  status,
+  size = "sm",
+  updatedByName,
+  updatedByRole,
+  updatedAt,
+}: {
+  status?: string;
+  size?: "sm" | "xs";
+  updatedByName?: string | null;
+  updatedByRole?: string | null;
+  updatedAt?: string | null;
+}) {
   if (!status) return <span className="text-slate-300 text-xs">—</span>;
   const s = MANIFEST_STATUSES.find((x) => x.value === status);
   if (!s) return <span className="text-xs text-slate-500 capitalize">{status.replace(/_/g, " ")}</span>;
   const base = size === "xs"
     ? "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold border tracking-wide"
     : "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold border tracking-wide";
+  // Show the ℹ bubble only when we actually have updater info to display
+  const showBubble = !!(updatedByName || updatedAt);
   return (
-    <span className={`${base} ${s.tw}`}>
-      <span className="text-[11px] leading-none">{s.icon}</span>
-      {s.label}
+    <span className="inline-flex items-center gap-1">
+      <span className={`${base} ${s.tw}`}>
+        <span className="text-[11px] leading-none">{s.icon}</span>
+        {s.label}
+      </span>
+      {showBubble && (
+        <StatusUpdatedByBubble
+          updatedByName={updatedByName}
+          updatedByRole={updatedByRole}
+          updatedAt={updatedAt}
+          size={size}
+        />
+      )}
     </span>
   );
 }
@@ -765,15 +874,23 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
   const { toast } = useToast();
 
   // ── Auth user ──────────────────────────────────────────────────────────────
+  // Resolves email + display name + role up-front so every status update can
+  // be stamped with "updated_by" / "updated_by_name" / "updated_by_role" and
+  // shown in the ℹ bubble next to every status badge.
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
       const u = data?.session?.user;
       if (u) {
         const name = u.user_metadata?.full_name || u.user_metadata?.name || u.email?.split("@")[0] || "Admin";
         setCurrentUser({ email: u.email || "", name });
-        // ROLE GATE support: resolve the logged-in user's role from profiles
-        const { data: prof } = await supabase.from("profiles").select("role").eq("user_id", u.id).single();
+        // ROLE GATE support: resolve the logged-in user's role + full_name from profiles
+        const { data: prof } = await supabase.from("profiles").select("role, full_name").eq("user_id", u.id).single();
         setCurrentUserRole(prof?.role ?? null);
+        // Prefer the profiles.full_name (set by PartnerManagement) over the
+        // auth.user_metadata value so the ℹ bubble shows the real name.
+        if (prof?.full_name) {
+          setCurrentUser({ email: u.email || "", name: prof.full_name });
+        }
       }
     });
   }, []);
@@ -1274,7 +1391,18 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
               if (!foundIds.has(tid)) missingTrackingIds.push(tid);
             });
 
-            const newEvent = { status, timestamp: nowIso, location, notes: comment || "" };
+            // Stamp who made this status change so the ℹ bubble can show it.
+            // updated_by is the auth uid; updated_by_name + updated_by_role are
+            // denormalized so we don't need a join when rendering the badge.
+            const newEvent = {
+              status,
+              timestamp: nowIso,
+              location,
+              notes: comment || "",
+              updated_by: currentUser?.email || "admin",
+              updated_by_name: currentUser?.name || currentUser?.email || "Admin",
+              updated_by_role: currentUserRole || "admin",
+            };
             await Promise.all(
               rows.map(async (r: any) => {
                 const existing = Array.isArray(r.status_timeline) ? r.status_timeline : [];
@@ -1287,6 +1415,8 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
                 const patch: Record<string, any> = {
                   current_status: status,
                   updated_at: nowIso,
+                  updated_by_name: currentUser?.name || currentUser?.email || "Admin",
+                  updated_by_role: currentUserRole || "admin",
                   status_timeline: [...existing, newEvent],
                 };
 
@@ -1421,6 +1551,9 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
               timestamp: ts,
               location: ev.location || "",
               notes: ev.notes || "",
+              updated_by: currentUser?.email || "staff",
+              updated_by_name: currentUser?.name || currentUser?.email || "Staff",
+              updated_by_role: currentUserRole || "staff",
             };
             const key = `${ts}|${status}`;
             const idx = merged.findIndex(
@@ -1441,6 +1574,8 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
           const update: Record<string, any> = {
             status_timeline: merged,
             updated_at: new Date().toISOString(),
+            updated_by_name: currentUser?.name || currentUser?.email || "Staff",
+            updated_by_role: currentUserRole || "staff",
           };
 
           // Bump current_status to the newest event's status, unless the
@@ -1825,7 +1960,7 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
                         <TableCell onClick={(e) => e.stopPropagation()}>
                           <Select value={entry.manifestStatus || ""} onValueChange={(v) => openSingleStatusDialog(entry.manifestId, v)}>
                             <SelectTrigger className="h-7 w-[150px] text-[11px] border-slate-200 bg-white px-2 py-0">
-                              <SelectValue placeholder="Set status…">{entry.manifestStatus ? <ManifestStatusBadge status={entry.manifestStatus} size="xs" /> : <span className="text-slate-400 text-[11px]">Set status…</span>}</SelectValue>
+                              <SelectValue placeholder="Set status…">{entry.manifestStatus ? <ManifestStatusBadge status={entry.manifestStatus} size="xs" updatedByName={(entry as any).updated_by_name} updatedByRole={(entry as any).updated_by_role} updatedAt={(entry as any).updated_at} /> : <span className="text-slate-400 text-[11px]">Set status…</span>}</SelectValue>
                             </SelectTrigger>
                             <SelectContent>{MANIFEST_STATUSES.map((s) => (<SelectItem key={s.value} value={s.value}><span className="flex items-center gap-2"><span>{s.icon}</span><span>{s.label}</span></span></SelectItem>))}</SelectContent>
                           </Select>
@@ -1874,7 +2009,15 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
                             {entry.isLocked
                               ? <Badge className="bg-slate-700 text-white text-[10px] gap-1"><Lock className="h-2.5 w-2.5" /> Locked</Badge>
                               : <Badge className="bg-green-100 text-green-700 border-green-200 text-[10px]">Open</Badge>}
-                            {entry.manifestStatus && <ManifestStatusBadge status={entry.manifestStatus} size="xs" />}
+                            {entry.manifestStatus && (
+                              <ManifestStatusBadge
+                                status={entry.manifestStatus}
+                                size="xs"
+                                updatedByName={(entry as any).updated_by_name}
+                                updatedByRole={(entry as any).updated_by_role}
+                                updatedAt={(entry as any).updated_at}
+                              />
+                            )}
                           </div>
                         </div>
                         {/* Details grid */}
@@ -1908,7 +2051,7 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
                         <div className="mt-2.5 flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
                           <Select value={entry.manifestStatus || ""} onValueChange={(v) => openSingleStatusDialog(entry.manifestId, v)}>
                             <SelectTrigger className="h-7 w-[140px] text-[11px] border-slate-200 bg-white px-2 py-0">
-                              <SelectValue placeholder="Set status…">{entry.manifestStatus ? <ManifestStatusBadge status={entry.manifestStatus} size="xs" /> : <span className="text-slate-400 text-[11px]">Set status…</span>}</SelectValue>
+                              <SelectValue placeholder="Set status…">{entry.manifestStatus ? <ManifestStatusBadge status={entry.manifestStatus} size="xs" updatedByName={(entry as any).updated_by_name} updatedByRole={(entry as any).updated_by_role} updatedAt={(entry as any).updated_at} /> : <span className="text-slate-400 text-[11px]">Set status…</span>}</SelectValue>
                             </SelectTrigger>
                             <SelectContent>{MANIFEST_STATUSES.map((s) => (<SelectItem key={s.value} value={s.value}><span className="flex items-center gap-2"><span>{s.icon}</span><span>{s.label}</span></span></SelectItem>))}</SelectContent>
                           </Select>
@@ -2406,7 +2549,13 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
                                   <td className="px-3 py-2 font-semibold">{p.pieces ?? 1}</td>
                                   <td className="px-3 py-2 font-semibold">{p.weight} kg</td>
                                   <td className="px-3 py-2">
-                                    <ManifestStatusBadge status={p.current_status} size="xs" />
+                                    <ManifestStatusBadge
+                                      status={p.current_status}
+                                      size="xs"
+                                      updatedByName={p.updated_by_name || p.status_comment_by}
+                                      updatedByRole={p.updated_by_role}
+                                      updatedAt={p.updated_at}
+                                    />
                                   </td>
                                 </tr>
                               ))}
