@@ -288,7 +288,7 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
     isPartnerView ||
     currentUserRole === "partner" ||
     (!!currentUserRole && currentUserRole !== "admin" && currentUserRole !== "staff");
-  const canEditParcel = !isRestrictedUser;   // Edit button + inline ID editing
+  const canEditParcel = !isRestrictedUser;   // Edit button (other parcel fields). NOTE: ID editing is gated by isAdminUser separately.
   const canEmailParcel = !isRestrictedUser;  // X-Ray email button
   const canDeleteParcel = isAdminUser;       // ONLY admin can delete (staff cannot)
 
@@ -657,7 +657,7 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
     if (savingCell) return;
     // ROLE GATE: Reference / Tracking IDs are not editable for partners
     // and other restricted roles.
-    if (!canEditParcel) {
+    if (!isAdminUser) {
       toast({ title: "Not allowed", description: "Reference / Tracking IDs cannot be edited by your role.", variant: "destructive" });
       return;
     }
@@ -895,7 +895,7 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               onChange={(e) => setEditValue(e.target.value)}
                               onBlur={saveEditingCell} onKeyDown={handleEditKeyDown}
                               className="h-6 font-mono text-xs w-full mb-1" />
-                          ) : canEditParcel ? (
+                          ) : isAdminUser ? (
                             <div
                               className="font-mono font-bold text-blue-600 cursor-pointer hover:underline decoration-dashed underline-offset-2 truncate"
                               onClick={() => startEditingCell(parcel, "reference_id")}
@@ -914,7 +914,7 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               onChange={(e) => setEditValue(e.target.value)}
                               onBlur={saveEditingCell} onKeyDown={handleEditKeyDown}
                               className="h-6 font-mono text-xs w-full mt-1" />
-                          ) : canEditParcel ? (
+                          ) : isAdminUser ? (
                             <div
                               className="font-mono text-[10px] text-slate-500 cursor-pointer hover:underline decoration-dashed underline-offset-2 truncate mt-0.5"
                               onClick={() => startEditingCell(parcel, "tracking_id")}
@@ -1098,7 +1098,7 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               onChange={(e) => setEditValue(e.target.value)}
                               onBlur={saveEditingCell} onKeyDown={handleEditKeyDown}
                               className="h-7 font-mono text-xs w-36" />
-                          ) : canEditParcel ? (
+                          ) : isAdminUser ? (
                             <span
                               className="font-mono font-bold text-blue-600 text-sm cursor-pointer"
                               onClick={() => startEditingCell(parcel, "reference_id")}
@@ -1123,7 +1123,7 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                             onChange={(e) => setEditValue(e.target.value)}
                             onBlur={saveEditingCell} onKeyDown={handleEditKeyDown}
                             className="h-7 font-mono text-xs w-full mt-1" />
-                        ) : canEditParcel ? (
+                        ) : isAdminUser ? (
                           <div
                             className="font-mono text-xs text-slate-500 mt-0.5 cursor-pointer"
                             onClick={() => startEditingCell(parcel, "tracking_id")}
@@ -1341,7 +1341,7 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
       <Dialog open={showEditForm} onOpenChange={(open) => { setShowEditForm(open); if (!open) setEditingParcel(null); }}>
         <DialogContent className="w-full max-w-4xl max-h-[90vh] overflow-y-auto overflow-x-hidden bg-[#0b0d1a] border border-white/10 text-white p-0 [&>button]:text-white/50 [&>button]:hover:text-white [&>button]:top-3 [&>button]:right-3">
           <DialogHeader className="sr-only"><DialogTitle>Edit Parcel — {editingParcel?.tracking_id}</DialogTitle></DialogHeader>
-          {editingParcel && <ParcelForm parcel={editingParcel} onSuccess={handleParcelUpdated} lockIdentifiers={isRestrictedUser} />}
+          {editingParcel && <ParcelForm parcel={editingParcel} onSuccess={handleParcelUpdated} lockIdentifiers={!isAdminUser} />}
         </DialogContent>
       </Dialog>
 
