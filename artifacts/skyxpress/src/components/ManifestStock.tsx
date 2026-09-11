@@ -1984,10 +1984,22 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
                 </div>
               </div>
 
-              {/* Sub-header: tabs + actions */}
-              <div className="bg-slate-100 border-b border-slate-200 flex-shrink-0">
-                <Tabs defaultValue="entry" className="w-full">
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-2 sm:px-4 pt-0 gap-0">
+              {/* Sub-header: tabs + actions.
+                  FIX: previously `flex-shrink-0` on this wrapper, combined with
+                  `<Tabs>` NOT being a flex column, meant the inner
+                  `overflow-y-auto flex-1` scroll region had no flex parent to
+                  grow inside. As a result, the Entry / Tracking / Billing
+                  tab content slid down past the dialog's `max-h-[92vh]` and
+                  got clipped by the outer `overflow-hidden` — so users saw
+                  the bottom buttons and tables slide off the screen.
+                  We now make this wrapper AND the <Tabs> both flex-column
+                  with `flex-1 min-h-0`, pin the tab-bar row with
+                  `flex-shrink-0`, and add `min-h-0` to the scrollable
+                  region so the flex item can actually shrink and the
+                  scrollbar appears inside the dialog. */}
+              <div className="bg-slate-100 border-b border-slate-200 flex flex-col flex-1 min-h-0">
+                <Tabs defaultValue="entry" className="w-full flex flex-col flex-1 min-h-0">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-2 sm:px-4 pt-0 gap-0 flex-shrink-0">
                     <div className="overflow-x-auto">
                       <TabsList className="h-9 bg-transparent gap-0 rounded-none border-0 p-0 flex w-max">
                         {[
@@ -2017,8 +2029,11 @@ export const ManifestStock = ({ filterUserId, filterEmail }: { filterUserId?: st
                     </div>
                   </div>
 
-                  {/* Scrollable content — maxHeight dropped; flex-1 fills the dialog instead */}
-                  <div className="overflow-y-auto flex-1">
+                  {/* Scrollable content — flex-1 + min-h-0 now actually works
+                      because <Tabs> and its parent wrapper are both
+                      `flex flex-col` (see FIX above). Without `min-h-0` the
+                      flex item refuses to shrink and content slides down. */}
+                  <div className="overflow-y-auto flex-1 min-h-0">
 
                     {/* ══ ENTRY TAB ══════════════════════════════════════════ */}
                     <TabsContent value="entry" className="m-0 p-4 space-y-4">
