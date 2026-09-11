@@ -412,31 +412,42 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
           {/* ASSIGNED BY: when an admin has assigned / reassigned this parcel,
               show "Assigned by AdminName" with the assigner's role badge +
               date stamp. This is critical for partners — it's how they know
-              an admin put this parcel on their dashboard. */}
-          {assignerName && (
-            <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
-              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
-                <UserPlus className="h-3 w-3" />
-                Assigned by {assignerName}
-              </span>
-              {assignerRole && (
-                <span className={`text-[9px] font-bold uppercase tracking-wide rounded px-1.5 py-0.5 border ${
-                  assignerRole === "partner"
-                    ? "text-purple-700 bg-purple-50 border-purple-200"
-                    : assignerRole === "staff"
-                      ? "text-blue-700 bg-blue-50 border-blue-200"
-                      : "text-red-700 bg-red-50 border-red-200"
-                }`}>
-                  {assignerRole}
+              an admin put this parcel on their dashboard.
+              Falls back to admin_note / status_notes if the dedicated
+              assigned_by_name column is empty (e.g. SQL migration not run). */}
+          {(() => {
+            const note = parcel?.assigned_by_name
+              || parcel?.admin_note
+              || parcel?.status_notes
+              || "";
+            const m = note.match(/^Assigned by (.+?)\s+on\s+/);
+            const displayName = parcel?.assigned_by_name || assignerName || (m ? m[1] : null);
+            if (!displayName) return null;
+            return (
+              <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                  <UserPlus className="h-3 w-3" />
+                  Assigned by {displayName}
                 </span>
-              )}
-              {parcel?.assigned_at && (
-                <span className="text-[10px] text-slate-400">
-                  {new Date(parcel.assigned_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
-                </span>
-              )}
-            </div>
-          )}
+                {assignerRole && (
+                  <span className={`text-[9px] font-bold uppercase tracking-wide rounded px-1.5 py-0.5 border ${
+                    assignerRole === "partner"
+                      ? "text-purple-700 bg-purple-50 border-purple-200"
+                      : assignerRole === "staff"
+                        ? "text-blue-700 bg-blue-50 border-blue-200"
+                        : "text-red-700 bg-red-50 border-red-200"
+                  }`}>
+                    {assignerRole}
+                  </span>
+                )}
+                {parcel?.assigned_at && (
+                  <span className="text-[10px] text-slate-400">
+                    {new Date(parcel.assigned_at).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}
+                  </span>
+                )}
+              </div>
+            );
+          })()}
         </div>
         <Badge className={`self-start sm:self-auto shrink-0 ${statusColors[parcel.current_status as keyof typeof statusColors] || "bg-gray-100 text-gray-800"}`}>
           <StatusIcon className="w-4 h-4 mr-2" />

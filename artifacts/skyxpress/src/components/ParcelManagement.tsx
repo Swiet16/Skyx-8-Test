@@ -545,18 +545,25 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
       // just created_by + created_by_name so the assignment still works.
       // We ALSO store the admin's name in admin_note as a fallback so the
       // partner can see who assigned it even without the SQL migration.
+      // Format the admin_note in a parseable way: we use the format
+      // "Assigned by NAME on TIMESTAMP" so the partner's parcel list can
+      // extract the name even if the assigned_by_name column doesn't exist.
+      // We also store it in status_notes (also fetched) as a backup.
+      const assignNote = `Assigned by ${assignedByName} on ${new Date().toLocaleString()}`;
       const fullPayload = {
         created_by: assignPartnerId,
         created_by_name: partnerName,
         assigned_by: assignedById,
         assigned_by_name: assignedByName,
         assigned_at: assignedAt,
-        admin_note: `Assigned by ${assignedByName} on ${new Date().toLocaleString()}`,
+        admin_note: assignNote,
+        status_notes: assignNote,
       };
       const minimalPayload = {
         created_by: assignPartnerId,
         created_by_name: partnerName,
-        admin_note: `Assigned by ${assignedByName} on ${new Date().toLocaleString()}`,
+        admin_note: assignNote,
+        status_notes: assignNote,
       };
 
       let updateError: any = null;
@@ -1190,15 +1197,15 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               small date stamp. Hidden for parcels that were
                               never assigned (older parcels pre-feature). */}
                           {(() => {
-                            // Fall back to admin_note ("Assigned by AdminName on ...")
-                            // if the dedicated assigned_by_name column is empty
-                            // (happens when the SQL migration hasn't been run yet).
-                            const adminNote = parcel.admin_note || "";
-                            const isAssignNote = adminNote.startsWith("Assigned by ");
-                            const fallbackName = isAssignNote
-                              ? adminNote.replace(/^Assigned by (\S+.*?)\s+on\s+.*$/, "$1")
-                              : null;
-                            const displayName = parcel.assigned_by_name || fallbackName;
+                            // Fall back to admin_note / status_notes if the
+                            // dedicated assigned_by_name column is empty.
+                            // Format: "Assigned by NAME on TIMESTAMP"
+                            const note = parcel.assigned_by_name
+                              || parcel.admin_note
+                              || parcel.status_notes
+                              || "";
+                            const m = note.match(/^Assigned by (.+?)\s+on\s+/);
+                            const displayName = parcel.assigned_by_name || (m ? m[1] : null);
                             if (!displayName) return null;
                             return (
                               <div className="mt-1 flex items-center gap-1 flex-wrap max-w-full">
@@ -1436,12 +1443,12 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
                               )}
                               {/* ASSIGNED BY (mobile): same pill, smaller */}
                               {(() => {
-                                const adminNote = parcel.admin_note || "";
-                                const isAssignNote = adminNote.startsWith("Assigned by ");
-                                const fallbackName = isAssignNote
-                                  ? adminNote.replace(/^Assigned by (\S+.*?)\s+on\s+.*$/, "$1")
-                                  : null;
-                                const displayName = parcel.assigned_by_name || fallbackName;
+                                const note = parcel.assigned_by_name
+                                  || parcel.admin_note
+                                  || parcel.status_notes
+                                  || "";
+                                const m = note.match(/^Assigned by (.+?)\s+on\s+/);
+                                const displayName = parcel.assigned_by_name || (m ? m[1] : null);
                                 if (!displayName) return null;
                                 return (
                                   <div className="mt-0.5 flex items-center gap-1 flex-wrap">
