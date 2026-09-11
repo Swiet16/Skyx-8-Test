@@ -1,5 +1,5 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- supabase-parcels-status-updated-by.sql
+-- supabase-parcels-status-updated-by.sql  (v3 — fully fixed)
 --
 -- Adds "Updated by" tracking to the parcels table + the status_timeline
 -- JSONB array so every status change records WHO made it (admin / staff /
@@ -11,11 +11,6 @@
 --   updated_by_name   TEXT       — denormalized display name (no join needed
 --                                  to render the ℹ bubble)
 --   updated_by_role   TEXT       — 'admin' | 'staff' | 'partner' (denormalized)
---
--- status_timeline JSONB entries get 3 extra keys per event:
---   updated_by        string     — auth uid of the updater
---   updated_by_name   string     — display name
---   updated_by_role   string     — role label
 --
 -- Run once in the Supabase SQL Editor. Safe to re-run (IF NOT EXISTS).
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -50,18 +45,17 @@ BEGIN
   END IF;
 END $$;
 
--- 2) Backfill existing rows --------------------------------------------------
---    For parcels that were updated before this feature shipped, set
+-- 2) Backfill the updated_by* columns on existing rows ----------------------
+--    For parcels updated before this feature shipped, set
 --    updated_by = created_by, updated_by_name = created_by_name, and
---    updated_by_role = (lookup role from profiles). This way older parcels
---    also show an ℹ bubble with the original creator as the updater.
+--    updated_by_role = the creator's role from profiles (or 'admin' fallback).
 DO $$
 BEGIN
   UPDATE public.parcels p
      SET updated_by      = p.created_by,
          updated_by_name = p.created_by_name,
          updated_by_role = COALESCE(
-           (SELECT pr.role FROM public.profiles pr WHERE pr.user_id = p.created_by),
+           (SELECT pr.role FROM public.profiles pr WHERE pr.user_id = p.created_by LIMIT 1),
            'admin'
          )
    WHERE p.updated_by IS NULL
@@ -69,40 +63,44 @@ BEGIN
 END $$;
 
 -- 3) Backfill the status_timeline JSONB array on existing rows --------------
---    Each timeline event gets the 3 new keys added (updated_by / updated_by_name
+--    Each timeline event gets 3 new keys added (updated_by / updated_by_name
 --    / updated_by_role) so the ℹ bubble works for historical events too.
 --    Events that already have those keys are left untouched.
 --
---    NOTE: elem->>'updated_by' returns TEXT, but parcels.created_by is UUID.
---    We cast created_by::text so the COALESCE types match (both text).
---    Same for the profiles.user_id lookup (already UUID, cast is a no-op
---    but harmless).
+--    FIX: previously this used correlated subqueries like
+--      (SELECT created_by FROM public.parcels WHERE id = parcels.id)
+--    which returned multiple rows because the `parcels.id` reference was
+--    ambiguous inside the jsonb_array_elements FROM clause.
+--    Now we reference the outer row's columns directly (p.created_by etc.)
+--    since the UPDATE is already targeting the parcels row — no subquery
+--    needed. We alias the parcels table as `p` in the UPDATE to make the
+--    lateral reference explicit.
 DO $$
 BEGIN
-  UPDATE public.parcels
+  UPDATE public.parcels p
      SET status_timeline = (
        SELECT jsonb_agg(
          CASE
            WHEN elem ? 'updated_by_name'
            THEN elem
            ELSE elem || jsonb_build_object(
-             'updated_by',       COALESCE(elem->>'updated_by',       (SELECT created_by::text    FROM public.parcels WHERE id = parcels.id)),
-             'updated_by_name',  COALESCE(elem->>'updated_by_name',  (SELECT created_by_name     FROM public.parcels WHERE id = parcels.id)),
+             'updated_by',       COALESCE(elem->>'updated_by',       p.created_by::text),
+             'updated_by_name',  COALESCE(elem->>'updated_by_name',  p.created_by_name),
              'updated_by_role',  COALESCE(elem->>'updated_by_role',  COALESCE(
-               (SELECT pr.role FROM public.profiles pr
-                  WHERE pr.user_id = (SELECT created_by FROM public.parcels WHERE id = parcels.id)),
+               (SELECT pr.role FROM public.profiles pr WHERE pr.user_id = p.created_by LIMIT 1),
                'admin'
              ))
            )
          END
        )
-       FROM jsonb_array_elements(CASE
-         WHEN jsonb_typeof(status_timeline) = 'array' THEN status_timeline
-         ELSE '[]'::jsonb
-       END) AS elem
+       FROM jsonb_array_elements(
+         CASE WHEN jsonb_typeof(p.status_timeline) = 'array'
+               THEN p.status_timeline
+               ELSE '[]'::jsonb END
+       ) AS elem
      )
-   WHERE jsonb_typeof(status_timeline) = 'array'
-     AND jsonb_array_length(status_timeline) > 0;
+   WHERE jsonb_typeof(p.status_timeline) = 'array'
+     AND jsonb_array_length(p.status_timeline) > 0;
 END $$;
 
 -- 4) Index for "who last touched this parcel" lookups -----------------------
@@ -110,13 +108,6 @@ CREATE INDEX IF NOT EXISTS idx_parcels_updated_by
   ON public.parcels (updated_by);
 
 -- 5) RLS policies -------------------------------------------------------------
---    Mirror the existing parcels SELECT policy: authenticated users can read
---    the new columns. Only admins / staff / the parcel's own partner can
---    WRITE updated_by* (the UI gates this further, but RLS is the source of
---    truth). We allow partners to update their OWN parcels' status (so they
---    can use the status picker on their own dashboard) but stamp their role
---    as 'partner' in the column so the ℹ bubble shows it.
-
 DO $$
 DECLARE
   pol_name TEXT;
@@ -149,29 +140,13 @@ CREATE POLICY parcels_updated_by_write
   FOR UPDATE
   TO authenticated
   USING (
-    EXISTS (
-      SELECT 1 FROM public.profiles p
-       WHERE p.user_id = auth.uid()
-         AND p.role = 'admin'
-    )
-    OR EXISTS (
-      SELECT 1 FROM public.profiles p
-       WHERE p.user_id = auth.uid()
-         AND p.role = 'staff'
-    )
+    EXISTS (SELECT 1 FROM public.profiles p WHERE p.user_id = auth.uid() AND p.role = 'admin')
+    OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.user_id = auth.uid() AND p.role = 'staff')
     OR created_by = auth.uid()
   )
   WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM public.profiles p
-       WHERE p.user_id = auth.uid()
-         AND p.role = 'admin'
-    )
-    OR EXISTS (
-      SELECT 1 FROM public.profiles p
-       WHERE p.user_id = auth.uid()
-         AND p.role = 'staff'
-    )
+    EXISTS (SELECT 1 FROM public.profiles p WHERE p.user_id = auth.uid() AND p.role = 'admin')
+    OR EXISTS (SELECT 1 FROM public.profiles p WHERE p.user_id = auth.uid() AND p.role = 'staff')
     OR created_by = auth.uid()
   );
 
@@ -180,8 +155,7 @@ COMMIT;
 -- ─────────────────────────────────────────────────────────────────────────────
 -- Verification (run after the migration to confirm):
 --
--- SELECT
---   column_name, data_type, is_nullable
+-- SELECT column_name, data_type, is_nullable
 -- FROM information_schema.columns
 -- WHERE table_schema = 'public'
 --   AND table_name = 'parcels'
@@ -197,9 +171,9 @@ COMMIT;
 --
 -- SELECT
 --   tracking_id,
---   status_timeline->0->>'status'         AS first_event_status,
---   status_timeline->0->>'updated_by_name' AS first_event_updater,
---   status_timeline->0->>'updated_by_role' AS first_event_role
+--   status_timeline->0->>'status'           AS first_event_status,
+--   status_timeline->0->>'updated_by_name'  AS first_event_updater,
+--   status_timeline->0->>'updated_by_role'  AS first_event_role
 -- FROM public.parcels
 -- WHERE jsonb_typeof(status_timeline) = 'array'
 --   AND jsonb_array_length(status_timeline) > 0
