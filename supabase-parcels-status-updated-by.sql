@@ -72,6 +72,11 @@ END $$;
 --    Each timeline event gets the 3 new keys added (updated_by / updated_by_name
 --    / updated_by_role) so the ℹ bubble works for historical events too.
 --    Events that already have those keys are left untouched.
+--
+--    NOTE: elem->>'updated_by' returns TEXT, but parcels.created_by is UUID.
+--    We cast created_by::text so the COALESCE types match (both text).
+--    Same for the profiles.user_id lookup (already UUID, cast is a no-op
+--    but harmless).
 DO $$
 BEGIN
   UPDATE public.parcels
@@ -81,11 +86,11 @@ BEGIN
            WHEN elem ? 'updated_by_name'
            THEN elem
            ELSE elem || jsonb_build_object(
-             'updated_by',       COALESCE(elem->>'updated_by',       (SELECT created_by        FROM public.parcels WHERE id = parcels.id)),
-             'updated_by_name',  COALESCE(elem->>'updated_by_name',  (SELECT created_by_name   FROM public.parcels WHERE id = parcels.id)),
+             'updated_by',       COALESCE(elem->>'updated_by',       (SELECT created_by::text    FROM public.parcels WHERE id = parcels.id)),
+             'updated_by_name',  COALESCE(elem->>'updated_by_name',  (SELECT created_by_name     FROM public.parcels WHERE id = parcels.id)),
              'updated_by_role',  COALESCE(elem->>'updated_by_role',  COALESCE(
                (SELECT pr.role FROM public.profiles pr
-                  WHERE pr.user_id = (SELECT created_by FROM public.parcels WHERE id = parcels.id)::uuid),
+                  WHERE pr.user_id = (SELECT created_by FROM public.parcels WHERE id = parcels.id)),
                'admin'
              ))
            )
