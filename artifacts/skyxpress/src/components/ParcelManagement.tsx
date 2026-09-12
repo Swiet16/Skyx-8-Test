@@ -283,17 +283,46 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
         // is missing or the role column is null).
         let resolvedRole: string | null = null;
         let resolvedName: string | null = null;
-        try {
-          const { data: prof } = await supabase
-            .from("profiles")
-            .select("role, full_name")
-            .eq("user_id", u.id)
-            .single();
-          resolvedRole = prof?.role ?? null;
-          resolvedName = prof?.full_name ?? null;
-        } catch { /* profiles row missing — fall through to user_metadata */ }
 
-        // Fallback: check user_metadata (some setups store role there)
+        // PRIORITY 1: Use the get_user_role() RPC. This is a SECURITY DEFINER
+        // function that bypasses RLS and checks BOTH profiles.id and
+        // profiles.user_id columns — so it works regardless of which schema
+        // the profiles table uses. This is the most reliable way to resolve
+        // the role.
+        try {
+          const { data: rpcRole } = await supabase.rpc("get_user_role");
+          if (rpcRole && typeof rpcRole === "string") {
+            resolvedRole = rpcRole;
+          }
+        } catch { /* RPC might not exist yet — fall through to profiles query */ }
+
+        // PRIORITY 2: Direct profiles query (works if RLS allows it and the
+        // RPC failed). This also fetches full_name for the display.
+        if (!resolvedRole) {
+          try {
+            // Try user_id first (standard Supabase schema)
+            const { data: prof } = await supabase
+              .from("profiles")
+              .select("role, full_name")
+              .eq("user_id", u.id)
+              .single();
+            resolvedRole = prof?.role ?? null;
+            resolvedName = prof?.full_name ?? null;
+          } catch {
+            // Fall back to id (older schema)
+            try {
+              const { data: prof } = await supabase
+                .from("profiles")
+                .select("role, full_name")
+                .eq("id", u.id)
+                .single();
+              resolvedRole = prof?.role ?? null;
+              resolvedName = prof?.full_name ?? null;
+            } catch { /* both failed — fall through to user_metadata */ }
+          }
+        }
+
+        // PRIORITY 3: Fallback to auth user_metadata
         if (!resolvedRole && u.user_metadata) {
           resolvedRole =
             u.user_metadata.role ||
