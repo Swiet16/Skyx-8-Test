@@ -268,29 +268,57 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
   // ── Current auth user (for stamping manifests + assignments) ────────────
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserEmail, setCurrentUserEmail] = useState<string | null>(null);
-  // Display name of the logged-in admin — resolved once on mount from
-  // profiles.full_name (falls back to email). Used as the "Assigned by"
-  // stamp when an admin reassigns a parcel to a partner.
   const [currentUserDisplayName, setCurrentUserDisplayName] = useState<string | null>(null);
-  // ── ROLE-BASED PERMISSIONS (enforced by logged-in role) ────────────────────
-  //   admin  : full access — view / edit / email / delete
-  //   staff  : view / edit / email — CANNOT delete parcels
-  //   partner: view + create only — NO edit / delete / email buttons, and
-  //            Reference ID + Tracking ID are NOT editable
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+  const [roleLoaded, setRoleLoaded] = useState(false);
+
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
       const u = data?.session?.user;
       if (u) {
         setCurrentUserId(u.id); setCurrentUserEmail(u.email ?? null);
-        const { data: prof } = await supabase.from("profiles").select("role, full_name").eq("user_id", u.id).single();
-        setCurrentUserRole(prof?.role ?? null);
-        setCurrentUserDisplayName(prof?.full_name || u.email || "Admin");
+
+        // Resolve role + full_name from profiles table. Also check
+        // auth user_metadata as a fallback (in case the profiles row
+        // is missing or the role column is null).
+        let resolvedRole: string | null = null;
+        let resolvedName: string | null = null;
+        try {
+          const { data: prof } = await supabase
+            .from("profiles")
+            .select("role, full_name")
+            .eq("user_id", u.id)
+            .single();
+          resolvedRole = prof?.role ?? null;
+          resolvedName = prof?.full_name ?? null;
+        } catch { /* profiles row missing — fall through to user_metadata */ }
+
+        // Fallback: check user_metadata (some setups store role there)
+        if (!resolvedRole && u.user_metadata) {
+          resolvedRole =
+            u.user_metadata.role ||
+            u.user_metadata.role_id ||
+            u.user_metadata.userRole ||
+            null;
+        }
+
+        setCurrentUserRole(resolvedRole);
+        setCurrentUserDisplayName(resolvedName || u.email || "Admin");
+        setRoleLoaded(true);
       }
     });
   }, []);
 
-  const isAdminUser = currentUserRole === "admin";
+  // ROLE HELPERS — case-insensitive + accept common variants so admins
+  // never get blocked by a casing mismatch ('Admin' vs 'admin') or a
+  // variant label ('administrator', 'super_admin').
+  const normalizeRole = (r: string | null | undefined): string =>
+    (r || "").toString().trim().toLowerCase();
+  const isAdminUser =
+    normalizeRole(currentUserRole) === "admin" ||
+    normalizeRole(currentUserRole) === "administrator" ||
+    normalizeRole(currentUserRole) === "super_admin" ||
+    normalizeRole(currentUserRole) === "superadmin";
   // Partner (and any other non-privileged role) gets the restricted view.
   // While the role is still loading (null) we keep the neutral staff-level
   // view so admins don't see a flicker — every action handler re-checks.
@@ -863,9 +891,19 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
   const startEditingCell = (parcel: Parcel, field: EditableField) => {
     if (savingCell) return;
     if (!isAdminUser) {
+      // Distinguish between "role still loading" and "genuinely not admin"
+      // so the admin gets an actionable message instead of a confusing block.
+      if (!roleLoaded) {
+        toast({
+          title: "Still loading",
+          description: "Your role is still loading — please wait 2 seconds and try again.",
+          variant: "default",
+        });
+        return;
+      }
       toast({
         title: "Not allowed",
-        description: "Only admins can edit Tracking ID / Reference ID.",
+        description: "Only admins can edit Tracking ID / Reference ID. Your current role: " + (currentUserRole || "unknown"),
         variant: "destructive",
       });
       return;
