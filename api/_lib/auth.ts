@@ -3,7 +3,7 @@
 
 import { getUser, getUserRole } from "./supabase-server";
 
-export type AllowedRole = "admin" | "staff" | "developer" | "partner";
+export type AllowedRole = "admin" | "staff" | "developer";
 
 /** Extract Bearer token from Authorization header */
 export function extractToken(authHeader: string | string[] | undefined): string | null {

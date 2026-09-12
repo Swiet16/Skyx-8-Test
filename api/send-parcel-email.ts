@@ -28,7 +28,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
-  const auth = await requireRole(req.headers.authorization, ["admin", "staff", "developer", "partner"]);
+  const auth = await requireRole(req.headers.authorization, ["admin", "staff", "developer"]);
   if (!auth.ok) {
     res.status(auth.status).json({ error: auth.error });
     return;
