@@ -850,12 +850,33 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
   };
 
   // ── Inline editing ───────────────────────────────────────────────────
+  // ROLE GATE: Only admins can edit Tracking ID + Reference ID.
+  // LIMIT: Each ID can only be changed 2 times per parcel. The count
+  // is tracked in id_edit_count (JSONB column on parcels).
+  const MAX_ID_EDITS = 2;
+  const getIdEditCount = (parcel: any, field: EditableField): number => {
+    const counts = parcel?.id_edit_count;
+    if (!counts || typeof counts !== "object") return 0;
+    return Number(counts[field] || 0);
+  };
+
   const startEditingCell = (parcel: Parcel, field: EditableField) => {
     if (savingCell) return;
-    // ROLE GATE: Reference / Tracking IDs are not editable for partners
-    // and other restricted roles.
     if (!isAdminUser) {
-      toast({ title: "Not allowed", description: "Reference / Tracking IDs cannot be edited by your role.", variant: "destructive" });
+      toast({
+        title: "Not allowed",
+        description: "Only admins can edit Tracking ID / Reference ID.",
+        variant: "destructive",
+      });
+      return;
+    }
+    const currentCount = getIdEditCount(parcel, field);
+    if (currentCount >= MAX_ID_EDITS) {
+      toast({
+        title: "Edit limit reached",
+        description: friendlyFieldName(field) + " has already been changed " + currentCount + " times (max " + MAX_ID_EDITS + ").",
+        variant: "destructive",
+      });
       return;
     }
     setEditingCell({ id: parcel.id, field });
@@ -876,15 +897,46 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
     }
     const previousValue = parcels.find((p) => p.id === id)?.[field] || "";
     if (trimmed === previousValue) { isSavingRef.current = false; cancelEditingCell(); return; }
+
+    const parcel = parcels.find((p) => p.id === id);
+    const currentCount = parcel ? getIdEditCount(parcel, field) : 0;
+    if (currentCount >= MAX_ID_EDITS) {
+      toast({
+        title: "Edit limit reached",
+        description: friendlyFieldName(field) + " has already been changed " + currentCount + " times (max " + MAX_ID_EDITS + ").",
+        variant: "destructive",
+      });
+      isSavingRef.current = false;
+      cancelEditingCell();
+      return;
+    }
+
     setSavingCell(true);
     try {
-      const { error } = await supabase.from("parcels").update({ [field]: field === "reference_id" ? (trimmed || null) : trimmed }).eq("id", id);
+      const newCount = currentCount + 1;
+      const existingCounts = (parcel?.id_edit_count && typeof parcel.id_edit_count === "object")
+        ? { ...parcel.id_edit_count }
+        : {};
+      existingCounts[field] = newCount;
+
+      const patch: Record<string, any> = {
+        [field]: field === "reference_id" ? (trimmed || null) : trimmed,
+        id_edit_count: existingCounts,
+      };
+
+      const { error } = await supabase.from("parcels").update(patch).eq("id", id);
       if (error) throw error;
-      setAllParcels((prev) => prev.map((p) => (p.id === id ? { ...p, [field]: trimmed } : p)));
-      toast({ title: "Saved", description: `${friendlyFieldName(field)} updated` });
+      setAllParcels((prev) => prev.map((p) => (p.id === id ? { ...p, [field]: trimmed, id_edit_count: existingCounts } : p)));
+      const remaining = MAX_ID_EDITS - newCount;
+      toast({
+        title: "Saved",
+        description: remaining > 0
+          ? friendlyFieldName(field) + " updated \u00b7 " + remaining + " edit" + (remaining !== 1 ? "s" : "") + " remaining"
+          : friendlyFieldName(field) + " updated \u00b7 no more edits allowed (limit reached)",
+      });
     } catch (error: any) {
       const isDuplicate = error?.code === "23505";
-      toast({ title: "Error", description: isDuplicate ? `That ${friendlyFieldName(field)} is already in use.` : error.message || "Failed to update", variant: "destructive" });
+      toast({ title: "Error", description: isDuplicate ? "That " + friendlyFieldName(field) + " is already in use." : error.message || "Failed to update", variant: "destructive" });
     } finally {
       setSavingCell(false); setEditingCell(null); setEditValue(""); isSavingRef.current = false;
     }
