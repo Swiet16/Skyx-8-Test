@@ -1019,21 +1019,24 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
         id_edit_count: existingCounts,
       };
 
-      let { error } = await supabase.from("parcels").update(patch).eq("id", id);
+      let updateResult = await supabase.from("parcels").update(patch).eq("id", id);
+      let error = updateResult.error;
 
-      // RESILIENCE: if the update fails because the id_edit_count column
-      // doesn't exist yet (HTTP 400 / "Could not find the column"), retry
-      // with just the ID field — the 2-time edit limit won't be tracked
-      // but the ID itself will still be updated.
-      if (error && (error.code === "PGRST204" || error.code === "42703" ||
-          (error.message || "").toLowerCase().includes("column") ||
-          (error.message || "").toLowerCase().includes("schema cache"))) {
-        console.warn("[saveEditingCell] id_edit_count column missing — retrying without it. Run supabase-parcels-id-edit-count.sql to enable edit tracking.");
+      // RESILIENCE: if the first update fails for ANY reason, retry with
+      // just the ID field (no id_edit_count). The id_edit_count column
+      // might not exist, or there might be a schema mismatch — either way,
+      // the ID itself should still be updatable.
+      if (error) {
+        console.warn("[saveEditingCell] First update failed:", error.code, error.message, "— retrying without id_edit_count");
         const minimalPatch: Record<string, any> = {
           [field]: field === "reference_id" ? (trimmed || null) : trimmed,
         };
         const retry = await supabase.from("parcels").update(minimalPatch).eq("id", id);
         error = retry.error;
+        if (!error) {
+          // Success on retry — the id_edit_count column was the problem
+          console.log("[saveEditingCell] Retry succeeded — id_edit_count column is missing. Run supabase-parcels-id-edit-count.sql to enable edit tracking.");
+        }
       }
       if (error) throw error;
       setAllParcels((prev) => prev.map((p) => (p.id === id ? { ...p, [field]: trimmed, id_edit_count: existingCounts } : p)));
