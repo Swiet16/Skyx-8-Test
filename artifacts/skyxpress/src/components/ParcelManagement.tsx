@@ -273,78 +273,95 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
   const [roleLoaded, setRoleLoaded] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(async ({ data }) => {
-      const u = data?.session?.user;
-      if (u) {
-        setCurrentUserId(u.id); setCurrentUserEmail(u.email ?? null);
+    let cancelled = false;
 
-        // Resolve role + full_name from profiles table. Also check
-        // auth user_metadata as a fallback (in case the profiles row
-        // is missing or the role column is null).
-        let resolvedRole: string | null = null;
-        let resolvedName: string | null = null;
-
-        // PRIORITY 1: Use the get_user_role() RPC. This is a SECURITY DEFINER
-        // function that bypasses RLS and checks BOTH profiles.id and
-        // profiles.user_id columns — so it works regardless of which schema
-        // the profiles table uses. This is the most reliable way to resolve
-        // the role.
-        try {
-          // get_user_role() takes a user_uuid parameter — pass the
-          // current user's id. Without the argument the function returns
-          // NULL (or throws), which was causing admins to be detected as
-          // non-admin.
-          const { data: rpcRole, error: rpcErr } = await supabase.rpc("get_user_role", { user_uuid: u.id });
-          if (rpcErr) {
-            console.warn("[ParcelManagement] get_user_role RPC error:", rpcErr.message);
-          } else if (rpcRole && typeof rpcRole === "string") {
-            resolvedRole = rpcRole;
-          }
-        } catch (e) {
-          console.warn("[ParcelManagement] get_user_role RPC threw:", e);
-          /* fall through to profiles query */
-        }
-
-        // PRIORITY 2: Direct profiles query (works if RLS allows it and the
-        // RPC failed). This also fetches full_name for the display.
-        if (!resolvedRole) {
-          try {
-            // Try user_id first (standard Supabase schema)
-            const { data: prof } = await supabase
-              .from("profiles")
-              .select("role, full_name")
-              .eq("user_id", u.id)
-              .single();
-            resolvedRole = prof?.role ?? null;
-            resolvedName = prof?.full_name ?? null;
-          } catch {
-            // Fall back to id (older schema)
-            try {
-              const { data: prof } = await supabase
-                .from("profiles")
-                .select("role, full_name")
-                .eq("id", u.id)
-                .single();
-              resolvedRole = prof?.role ?? null;
-              resolvedName = prof?.full_name ?? null;
-            } catch { /* both failed — fall through to user_metadata */ }
-          }
-        }
-
-        // PRIORITY 3: Fallback to auth user_metadata
-        if (!resolvedRole && u.user_metadata) {
-          resolvedRole =
-            u.user_metadata.role ||
-            u.user_metadata.role_id ||
-            u.user_metadata.userRole ||
-            null;
-        }
-
-        setCurrentUserRole(resolvedRole);
-        setCurrentUserDisplayName(resolvedName || u.email || "Admin");
+    // 5-second safety timeout — if the role resolution takes longer than
+    // 5 seconds (e.g. Supabase is slow / unreachable), force roleLoaded=true
+    // so the UI doesn't get stuck on 'Loading…' forever. The user can
+    // still retry by refreshing.
+    const timeoutId = setTimeout(() => {
+      if (!cancelled && !roleLoaded) {
+        console.warn("[ParcelManagement] Role resolution timeout — forcing roleLoaded=true. currentUserRole=", currentUserRole);
         setRoleLoaded(true);
       }
+    }, 5000);
+
+    supabase.auth.getSession().then(async ({ data }) => {
+      if (cancelled) return;
+      const u = data?.session?.user;
+      if (!u) {
+        console.warn("[ParcelManagement] No session user found");
+        setRoleLoaded(true);
+        return;
+      }
+
+      console.log("[ParcelManagement] Session user:", u.email, "id:", u.id);
+      setCurrentUserId(u.id);
+      setCurrentUserEmail(u.email ?? null);
+
+      let resolvedRole: string | null = null;
+      let resolvedName: string | null = null;
+
+      // PRIORITY 1: get_user_role() RPC
+      try {
+        console.log("[ParcelManagement] Calling get_user_role RPC…");
+        const { data: rpcRole, error: rpcErr } = await supabase.rpc("get_user_role", { user_uuid: u.id });
+        if (rpcErr) {
+          console.warn("[ParcelManagement] get_user_role RPC error:", rpcErr.message);
+        } else {
+          console.log("[ParcelManagement] get_user_role RPC returned:", rpcRole);
+          if (rpcRole && typeof rpcRole === "string") {
+            resolvedRole = rpcRole;
+          }
+        }
+      } catch (e) {
+        console.warn("[ParcelManagement] get_user_role RPC threw:", e);
+      }
+
+      // PRIORITY 2: Direct profiles query
+      if (!resolvedRole) {
+        try {
+          console.log("[ParcelManagement] Querying profiles table…");
+          const { data: prof, error: profErr } = await supabase
+            .from("profiles")
+            .select("role, full_name")
+            .eq("user_id", u.id)
+            .single();
+          if (profErr) {
+            console.warn("[ParcelManagement] profiles query error:", profErr.message);
+          } else {
+            console.log("[ParcelManagement] profiles query returned:", prof);
+            resolvedRole = prof?.role ?? null;
+            resolvedName = prof?.full_name ?? null;
+          }
+        } catch (e) {
+          console.warn("[ParcelManagement] profiles query threw:", e);
+        }
+      }
+
+      // PRIORITY 3: auth user_metadata fallback
+      if (!resolvedRole && u.user_metadata) {
+        resolvedRole =
+          u.user_metadata.role ||
+          u.user_metadata.role_id ||
+          u.user_metadata.userRole ||
+          null;
+        console.log("[ParcelManagement] user_metadata fallback role:", resolvedRole);
+      }
+
+      console.log("[ParcelManagement] Final resolved role:", resolvedRole);
+      setCurrentUserRole(resolvedRole);
+      setCurrentUserDisplayName(resolvedName || u.email || "Admin");
+      setRoleLoaded(true);
+    }).catch((err) => {
+      console.error("[ParcelManagement] getSession() rejected:", err);
+      setRoleLoaded(true); // unblock the UI even on failure
     });
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
   }, []);
 
   // ROLE HELPERS — case-insensitive + accept common variants so admins
