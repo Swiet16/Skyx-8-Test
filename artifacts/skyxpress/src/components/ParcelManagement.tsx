@@ -290,11 +290,20 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
         // the profiles table uses. This is the most reliable way to resolve
         // the role.
         try {
-          const { data: rpcRole } = await supabase.rpc("get_user_role");
-          if (rpcRole && typeof rpcRole === "string") {
+          // get_user_role() takes a user_uuid parameter — pass the
+          // current user's id. Without the argument the function returns
+          // NULL (or throws), which was causing admins to be detected as
+          // non-admin.
+          const { data: rpcRole, error: rpcErr } = await supabase.rpc("get_user_role", { user_uuid: u.id });
+          if (rpcErr) {
+            console.warn("[ParcelManagement] get_user_role RPC error:", rpcErr.message);
+          } else if (rpcRole && typeof rpcRole === "string") {
             resolvedRole = rpcRole;
           }
-        } catch { /* RPC might not exist yet — fall through to profiles query */ }
+        } catch (e) {
+          console.warn("[ParcelManagement] get_user_role RPC threw:", e);
+          /* fall through to profiles query */
+        }
 
         // PRIORITY 2: Direct profiles query (works if RLS allows it and the
         // RPC failed). This also fetches full_name for the display.
@@ -1030,6 +1039,22 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
             <CardTitle className="flex items-center gap-2">
               <Package className="h-5 w-5" />
               Parcel Management
+
+              {/* DEBUG BADGE: shows the detected role + isAdminUser status
+                  so we can see if the frontend is correctly identifying
+                  the admin. This can be removed once the issue is resolved. */}
+              <span
+                className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border ${
+                  isAdminUser
+                    ? "bg-emerald-100 text-emerald-700 border-emerald-300"
+                    : roleLoaded
+                      ? "bg-red-100 text-red-700 border-red-300"
+                      : "bg-amber-100 text-amber-700 border-amber-300"
+                }`}
+                title={`currentUserRole=${currentUserRole || "null"} | roleLoaded=${roleLoaded} | isAdminUser=${isAdminUser}`}
+              >
+                {roleLoaded ? (isAdminUser ? "Admin ✓" : `Role: ${currentUserRole || "null"}`) : "Loading…"}
+              </span>
 
               {/* ── Stylish IP reveal eye ── */}
               <div ref={ipPanelRef} className="relative flex items-center">
