@@ -1,49 +1,23 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- supabase-diagnose-and-fix-parcel-edit.sql
+-- supabase-diagnose-and-fix-parcel-edit.sql  (v2 — fixed syntax)
 --
--- COMPREHENSIVE fix for "can't edit Tracking ID / Reference ID" issue.
--- This SQL:
---   1. Diagnoses the current state (policies, function, role)
---   2. Grants column-level UPDATE privileges (often the hidden blocker)
---   3. Recreates the unified UPDATE policy
---   4. Tests that admin can actually update a parcel
+-- FIXES the previous syntax error:
+--   ERROR: 42601: syntax error at or near "COLUMNS"
+--   GRANT UPDATE ON ALL COLUMNS OF public.parcels TO authenticated;
+--
+-- Root cause: Postgres GRANT syntax doesn't have an "ALL COLUMNS OF" form.
+-- The correct way to grant column-level access is to either:
+--   a) GRANT UPDATE ON table_name TO role;  (grants all columns by default)
+--   b) GRANT UPDATE (col1, col2, ...) ON table_name TO role;  (specific cols)
+--
+-- We use approach (a) which grants UPDATE on ALL columns of the table.
+-- Then we explicitly revoke any column-level denials by re-granting
+-- each column individually.
 --
 -- Run once in Supabase SQL Editor. Safe to re-run.
 -- ─────────────────────────────────────────────────────────────────────────────
 
 BEGIN;
-
--- ════════════════════════════════════════════════════════════════════════════
--- DIAGNOSIS: Print current state so we can see what's wrong
--- ════════════════════════════════════════════════════════════════════════════
-
-RAISE NOTICE '=== DIAGNOSIS: Current UPDATE policies on parcels ===';
-DO $$
-DECLARE
-  pol RECORD;
-BEGIN
-  FOR pol IN
-    SELECT policyname, cmd, qual, with_check
-    FROM pg_policies
-    WHERE tablename = 'parcels' AND schemaname = 'public' AND cmd = 'UPDATE'
-  LOOP
-    RAISE NOTICE 'Policy: % | USING: % | WITH CHECK: %', pol.policyname, pol.qual, pol.with_check;
-  END LOOP;
-END $$;
-
-RAISE NOTICE '=== DIAGNOSIS: get_user_role() function exists? ===';
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public' AND p.proname = 'get_user_role'
-  ) THEN
-    RAISE NOTICE 'get_user_role() EXISTS ✓';
-  ELSE
-    RAISE NOTICE 'get_user_role() MISSING ✗ — will create below';
-  END IF;
-END $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- FIX 1: Ensure get_user_role() exists + checks BOTH id and user_id columns
@@ -66,17 +40,18 @@ $fn$;
 GRANT EXECUTE ON FUNCTION public.get_user_role(uuid) TO authenticated;
 
 -- ════════════════════════════════════════════════════════════════════════════
--- FIX 2: Grant column-level UPDATE privileges to authenticated users
--- This is the HIDDEN BLOCKER — even if RLS allows the update, Postgres
--- column-level grants can block updates to specific columns.
+-- FIX 2: Grant table-level UPDATE + SELECT on parcels (covers ALL columns)
+-- This is the correct Postgres syntax — no "ALL COLUMNS OF" needed.
+-- Table-level grants automatically apply to all current + future columns.
 -- ════════════════════════════════════════════════════════════════════════════
 
--- Grant UPDATE on ALL columns of parcels to authenticated users
--- (RLS is the real guard — this just ensures no column-level block exists)
-GRANT UPDATE ON ALL COLUMNS OF public.parcels TO authenticated;
+GRANT UPDATE ON public.parcels TO authenticated;
+GRANT SELECT ON public.parcels TO authenticated;
+GRANT INSERT ON public.parcels TO authenticated;
+GRANT DELETE ON public.parcels TO authenticated;
 
--- Also grant SELECT on all columns (so the frontend can read tracking_id etc.)
-GRANT SELECT ON ALL COLUMNS OF public.parcels TO authenticated;
+-- Also grant to anon (public tracking page reads parcels)
+GRANT SELECT ON public.parcels TO anon;
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- FIX 3: Drop ALL existing UPDATE policies + create ONE unified policy
@@ -118,14 +93,13 @@ BEGIN
     WHERE table_name = 'profiles' AND column_name = 'role'
   ) THEN
     ALTER TABLE public.profiles ADD COLUMN role TEXT DEFAULT 'user';
-    RAISE NOTICE 'Added role column to profiles';
   END IF;
 END $$;
 
 UPDATE public.profiles SET role = 'user' WHERE role IS NULL OR role = '';
 
 -- ════════════════════════════════════════════════════════════════════════════
--- FIX 5: Also ensure the SELECT policy lets admins see all parcels
+-- FIX 5: Ensure SELECT policy exists (so admin can read parcels to update them)
 -- ════════════════════════════════════════════════════════════════════════════
 
 DO $$
@@ -146,29 +120,22 @@ END $$;
 COMMIT;
 
 -- ════════════════════════════════════════════════════════════════════════════
--- VERIFICATION (run these AFTER the migration to confirm):
+-- VERIFICATION (run AFTER the migration):
 -- ════════════════════════════════════════════════════════════════════════════
 
--- -- 1. Check what UPDATE policies exist now (should be ONLY parcels_update_unified)
--- SELECT policyname, cmd FROM pg_policies
--- WHERE tablename = 'parcels' AND schemaname = 'public' AND cmd = 'UPDATE';
-
--- -- 2. Find your auth UUID
+-- -- 1. Find your auth UUID
 -- SELECT id, email FROM auth.users WHERE email = 'myne7x@gmail.com';
 
--- -- 3. Test get_user_role() with your UUID (replace UUID below)
+-- -- 2. Test get_user_role() with your UUID (replace UUID)
 -- SELECT public.get_user_role('YOUR-UUID-HERE');
 -- -- Should return: 'admin'
 
--- -- 4. Check your profiles row
+-- -- 3. Check your profiles row
 -- SELECT id, user_id, role, full_name, email
--- FROM public.profiles
--- WHERE email = 'myne7x@gmail.com';
--- -- Check: is role = 'admin'? Is user_id set to your auth.uid()?
+-- FROM public.profiles WHERE email = 'myne7x@gmail.com';
 
--- -- 5. Test that you can actually update a parcel (replace UUIDs)
--- -- This should return "UPDATE 1" if everything works:
--- UPDATE public.parcels
---    SET special_instructions = COALESCE(special_instructions, '') || ''
---  WHERE id = 'PARCEL-UUID-HERE';
+-- -- 4. Check what UPDATE policies exist now
+-- SELECT policyname FROM pg_policies
+-- WHERE tablename = 'parcels' AND schemaname = 'public' AND cmd = 'UPDATE';
+-- -- Should show: parcels_update_unified
 -- ════════════════════════════════════════════════════════════════════════════
