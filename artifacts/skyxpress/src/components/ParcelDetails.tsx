@@ -223,9 +223,13 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
 
     setSavingInfo(true);
     try {
-      const payload = {
-        tracking_id: infoForm.tracking_id,
-        reference_id: infoForm.reference_id || null,
+      // Check if the user actually changed tracking_id or reference_id.
+      // If they did NOT change them, we exclude them from the payload so
+      // the RLS policy on those columns doesn't trigger.
+      const trackingIdChanged = infoForm.tracking_id !== (parcel.tracking_id || "");
+      const referenceIdChanged = infoForm.reference_id !== (parcel.reference_id || "");
+
+      const payload: Record<string, any> = {
         parcel_type: infoForm.parcel_type,
         service_type: infoForm.service_type,
         document_type: infoForm.document_type,
@@ -239,9 +243,47 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
         special_instructions: infoForm.special_instructions,
       };
 
+      // Only include tracking_id / reference_id in the payload if the user
+      // actually changed them. This avoids triggering RLS policies that
+      // restrict who can write those columns.
+      if (trackingIdChanged) payload.tracking_id = infoForm.tracking_id;
+      if (referenceIdChanged) payload.reference_id = infoForm.reference_id || null;
+
       const { error } = await supabase.from("parcels").update(payload).eq("id", parcel.id);
 
-      if (error) throw error;
+      if (error) {
+        // If the error is an RLS rejection on tracking_id/reference_id,
+        // retry the update WITHOUT those fields so the rest of the form
+        // (weight, dimensions, etc.) still saves.
+        const isRlsError =
+          error.code === "42501" ||
+          (error.message || "").toLowerCase().includes("permission") ||
+          (error.message || "").toLowerCase().includes("policy") ||
+          (error.message || "").toLowerCase().includes("denied");
+
+        if (isRlsError && (trackingIdChanged || referenceIdChanged)) {
+          console.warn("[ParcelDetails] RLS blocked ID update — retrying without tracking_id/reference_id");
+          const { tracking_id: _tid, reference_id: _rid, ...safePayload } = payload;
+          const { error: retryError } = await supabase
+            .from("parcels")
+            .update(safePayload)
+            .eq("id", parcel.id);
+
+          if (retryError) throw retryError;
+
+          // Saved everything except the IDs — warn the user
+          setLocalOverrides((prev) => ({ ...prev, ...safePayload }));
+          toast({
+            title: "Saved (partial)",
+            description: "Other fields updated, but Tracking ID / Reference ID could not be changed. Your role may not have permission, or the edit limit (2x) has been reached.",
+            variant: "default",
+          });
+          setEditingInfo(false);
+          onUpdate();
+          return;
+        }
+        throw error;
+      }
 
       setLocalOverrides((prev) => ({ ...prev, ...payload }));
       toast({
