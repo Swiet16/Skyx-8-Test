@@ -944,8 +944,10 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
   };
 
   const startEditingCell = (parcel: Parcel, field: EditableField) => {
+    console.log("[startEditingCell] CLICKED", { field, isAdminUser, roleLoaded, currentUserRole, savingCell });
     if (savingCell) return;
     if (!isAdminUser) {
+      console.log("[startEditingCell] BLOCKED — isAdminUser is false", { isAdminUser, roleLoaded, currentUserRole });
       // Distinguish between "role still loading" and "genuinely not admin"
       // so the admin gets an actionable message instead of a confusing block.
       if (!roleLoaded) {
