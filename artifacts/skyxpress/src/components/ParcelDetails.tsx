@@ -83,6 +83,8 @@ const documentTypeOptions = [
 ];
 
 interface InfoForm {
+  tracking_id: string;
+  reference_id: string;
   parcel_type: string;
   service_type: string;
   document_type: string;
@@ -162,6 +164,8 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
   const [editingInfo, setEditingInfo] = useState(false);
   const [savingInfo, setSavingInfo] = useState(false);
   const [infoForm, setInfoForm] = useState<InfoForm>({
+    tracking_id: displayParcel.tracking_id || "",
+    reference_id: displayParcel.reference_id || "",
     parcel_type: displayParcel.parcel_type || "box",
     service_type: displayParcel.service_type || "standard",
     document_type: displayParcel.document_type || "document",
@@ -177,6 +181,8 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
 
   const startEditingInfo = () => {
     setInfoForm({
+      tracking_id: displayParcel.tracking_id || "",
+      reference_id: displayParcel.reference_id || "",
       parcel_type: displayParcel.parcel_type || "box",
       service_type: displayParcel.service_type || "standard",
       document_type: displayParcel.document_type || "document",
@@ -218,6 +224,8 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
     setSavingInfo(true);
     try {
       const payload = {
+        tracking_id: infoForm.tracking_id,
+        reference_id: infoForm.reference_id || null,
         parcel_type: infoForm.parcel_type,
         service_type: infoForm.service_type,
         document_type: infoForm.document_type,
@@ -574,6 +582,33 @@ export const ParcelDetails = ({ parcel, onUpdate, onClose, readOnly = false }: P
         <CardContent>
           {editingInfo ? (
             <div className="space-y-4">
+              {/* Tracking ID + Reference ID — admin-only, 2-edit limit */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-3 rounded-lg bg-amber-50/40 border border-amber-100">
+                <div className="space-y-2">
+                  <Label htmlFor="edit_tracking_id" className="flex items-center gap-1.5">
+                    Tracking ID
+                    <span className="text-[9px] font-bold uppercase rounded px-1 py-0.5 bg-red-100 text-red-700 border border-red-200">Admin only</span>
+                  </Label>
+                  <Input
+                    id="edit_tracking_id"
+                    value={infoForm.tracking_id}
+                    onChange={(e) => handleInfoFieldChange("tracking_id", e.target.value)}
+                    className="font-mono"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit_reference_id" className="flex items-center gap-1.5">
+                    Reference ID
+                    <span className="text-[9px] font-bold uppercase rounded px-1 py-0.5 bg-red-100 text-red-700 border border-red-200">Admin only</span>
+                  </Label>
+                  <Input
+                    id="edit_reference_id"
+                    value={infoForm.reference_id}
+                    onChange={(e) => handleInfoFieldChange("reference_id", e.target.value)}
+                    className="font-mono"
+                  />
+                </div>
+              </div>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="edit_parcel_type">Type</Label>
