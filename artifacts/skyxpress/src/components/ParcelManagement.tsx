@@ -1019,7 +1019,22 @@ export const ParcelManagement = ({ filterUserId, isPartnerView = false }: { filt
         id_edit_count: existingCounts,
       };
 
-      const { error } = await supabase.from("parcels").update(patch).eq("id", id);
+      let { error } = await supabase.from("parcels").update(patch).eq("id", id);
+
+      // RESILIENCE: if the update fails because the id_edit_count column
+      // doesn't exist yet (HTTP 400 / "Could not find the column"), retry
+      // with just the ID field — the 2-time edit limit won't be tracked
+      // but the ID itself will still be updated.
+      if (error && (error.code === "PGRST204" || error.code === "42703" ||
+          (error.message || "").toLowerCase().includes("column") ||
+          (error.message || "").toLowerCase().includes("schema cache"))) {
+        console.warn("[saveEditingCell] id_edit_count column missing — retrying without it. Run supabase-parcels-id-edit-count.sql to enable edit tracking.");
+        const minimalPatch: Record<string, any> = {
+          [field]: field === "reference_id" ? (trimmed || null) : trimmed,
+        };
+        const retry = await supabase.from("parcels").update(minimalPatch).eq("id", id);
+        error = retry.error;
+      }
       if (error) throw error;
       setAllParcels((prev) => prev.map((p) => (p.id === id ? { ...p, [field]: trimmed, id_edit_count: existingCounts } : p)));
       const remaining = MAX_ID_EDITS - newCount;
