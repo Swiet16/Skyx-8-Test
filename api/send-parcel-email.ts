@@ -5,22 +5,17 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import { requireRole } from "./_lib/auth";
 import { fetchParcel } from "./_lib/supabase-server";
 import { createXrayEmailHtml } from "./_lib/emailTemplate";
-import { sendBrevoEmail } from "./_lib/brevo-client";
+import { sendResendEmail } from "./_lib/resend-client";
 
 /**
  * api/send-parcel-email.ts
  *
  * Sends the X-Ray cleared email to the parcel's receiver_email.
  *
- * REFACTORED to use the new brevo-client.ts which:
- *   - Retries transient failures 3 times with exponential backoff
- *   - Detects the server's IP once + caches it for 5 minutes
- *   - Classifies errors (IP block / invalid key / rate limit / network)
- *   - Queues failed emails in a Supabase `email_queue` table for later retry
+ * NOW USES RESEND instead of Brevo — Resend has no IP restriction,
+ * so it works from any Vercel serverless IP without whitelisting.
  *
- * The previous version would fail silently when Vercel's IP rotated out
- * of Brevo's whitelist. Now the UI gets a clear error code AND the email
- * is stored in the queue so it can be retried once the IP is fixed.
+ * The email template (createXrayEmailHtml) is UNCHANGED — same design.
  */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== "POST") {
@@ -68,11 +63,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const html = createXrayEmailHtml(parcel);
   const ref = parcel.reference_id || parcel.tracking_id || "your parcel";
 
-  const result = await sendBrevoEmail({
-    to: [{ email: recipientEmail, name: parcel.sender_name || recipientEmail }],
+  const result = await sendResendEmail({
+    to: recipientEmail,
     subject: `✈ X-Ray Cleared — Ref: ${ref} | SkyXpress`,
     htmlContent: html,
-    tags: ["x-ray", "parcel", parcel.tracking_id || ""].filter(Boolean),
+    fromName: "SkyXpress International",
+    fromEmail: "onboarding@resend.dev", // Resend's default test sender
+    tags: ["x-ray", "parcel"],
   });
 
   if (result.success) {
@@ -86,12 +83,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         Prefer: "return=minimal",
       },
       body: JSON.stringify({ xray_email_sent_at: new Date().toISOString() }),
-    }).catch(() => {}); // best-effort — the email was already sent
+    }).catch(() => {});
 
     res.json({
       success: true,
       messageId: result.messageId,
       sentTo: recipientEmail,
+      provider: "resend",
     });
     return;
   }
@@ -101,24 +99,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const status =
     code === "key_missing" || code === "key_invalid" ? 503 :
     code === "rate_limited" ? 429 :
-    code === "ip_not_authorized" ? 502 :
+    code === "sender_not_verified" ? 400 :
     code === "recipient_invalid" ? 400 :
     502;
 
   res.status(status).json({
     error: code || "unknown",
     message: result.error?.message,
-    ipAddress: result.error?.ipAddress,
-    brevoUrl: result.error?.brevoUrl,
     retryAfter: result.error?.retryAfter,
     queuedForRetry: result.queuedForRetry,
     queueId: result.queueId,
-    // Friendly hint shown in the UI
+    provider: "resend",
     hint:
-      code === "ip_not_authorized"
-        ? "Brevo is blocking this server's IP. Go to https://app.brevo.com/security/authorised_ips and add the IP shown, OR disable IP restriction entirely (recommended for serverless)."
-        : code === "key_missing"
-        ? "Set the BREVO_API_KEY environment variable on Vercel."
+      code === "key_missing"
+        ? "Set the RESEND_API_KEY environment variable on Vercel."
+        : code === "sender_not_verified"
+        ? "Verify your domain at https://resend.com/domains, or use onboarding@resend.dev for testing."
         : code === "rate_limited"
         ? "Too many emails sent recently — wait a minute and try again."
         : undefined,
