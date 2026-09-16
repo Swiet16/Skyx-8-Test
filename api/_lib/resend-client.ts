@@ -64,7 +64,7 @@ const RESEND_API = "https://api.resend.com/emails";
 // "SkyXpress International <noreply@skyxpress.com>".
 const DEFAULT_FROM = {
   name: "SkyXpress International",
-  email: "onboarding@resend.dev",
+  email: "noreply@skyxpress.site",
 };
 
 const MAX_RETRIES = 3;
