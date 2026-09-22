@@ -59,12 +59,11 @@ export interface ResendResult {
 // ─── Constants ────────────────────────────────────────────────────────────
 const RESEND_API = "https://api.resend.com/emails";
 
-// Default sender — uses Resend's onboarding domain for testing.
-// Once you verify your own domain (e.g. skyxpress.com), change this to
-// "SkyXpress International <noreply@skyxpress.com>".
+// Default sender — myskyxpress.com is verified in Resend, so this can
+// deliver to any inbox (not just the account owner).
 const DEFAULT_FROM = {
   name: "SkyXpress International",
-  email: "noreply@skyxpress.site",
+  email: "noreply@myskyxpress.com",
 };
 
 const MAX_RETRIES = 3;

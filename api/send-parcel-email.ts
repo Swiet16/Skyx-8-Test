@@ -68,7 +68,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     subject: `✈ X-Ray Cleared — Ref: ${ref} | SkyXpress`,
     htmlContent: html,
     fromName: "SkyXpress International",
-    fromEmail: "noreply@skyxpress.site", // Verified domain — can send to anyone
+    fromEmail: "noreply@myskyxpress.com", // Verified domain in Resend — can send to anyone
     tags: ["x-ray", "parcel"],
   });
 

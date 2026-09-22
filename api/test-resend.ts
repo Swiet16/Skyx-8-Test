@@ -67,7 +67,7 @@ Get your key from https://resend.com/api-keys`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        from: "SkyXpress International <noreply@skyxpress.site>",
+        from: "SkyXpress International <noreply@myskyxpress.com>",
         to: [toEmail],
         subject: "✈ SkyXpress Resend Test — API Key Works!",
         html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;background:#f8fafc;padding:32px;border-radius:12px;">
@@ -77,7 +77,7 @@ Get your key from https://resend.com/api-keys`,
     You can now send X-Ray emails from the SkyXpress dashboard.
   </p>
   <p style="font-size:14px;color:#64748b;margin-top:24px;">
-    Sent from: <code>noreply@skyxpress.site</code><br>
+    Sent from: <code>noreply@myskyxpress.com</code><br>
     Sent to: <code>${toEmail}</code><br>
     Time: ${new Date().toISOString()}
   </p>
@@ -95,7 +95,7 @@ Get your key from https://resend.com/api-keys`,
         details: `Email sent successfully!
 
 Email ID: ${data.id}
-Sent from: noreply@skyxpress.site
+Sent from: noreply@myskyxpress.com
 Sent to: ${toEmail}
 
 Check your inbox (and spam folder). The email should arrive within 30 seconds.
