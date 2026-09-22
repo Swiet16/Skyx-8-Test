@@ -120,7 +120,7 @@ export async function generateBulkManifestPDF(
   pdf.text("SHIPMENT MANIFEST", PW / 2, 17, { align: "center" });
   pdf.setFont("helvetica", "normal"); pdf.setFontSize(8);
   tc(pdf, MGRAY);
-  pdf.text("SkyXpress International Courier & Cargo  ·  skyxpress.site", PW / 2, 25, { align: "center" });
+  pdf.text("SkyXpress International Courier & Cargo  ·  www.myskyxpress.com", PW / 2, 25, { align: "center" });
 
   // ── Manifest status pill — top-right (compact, label only, no tag zone) ───
   const mStatus = (entry as any).manifestStatus as string | undefined;

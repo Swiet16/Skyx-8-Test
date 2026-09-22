@@ -1311,7 +1311,7 @@ export const generateAirwayBillWithPayment = async (parcel: any, mode: OutputMod
       // Website — plain printed text, centered on its own line directly below the
       // warning text. Not a clickable link, just visible text on the printout.
       TF(Math.max(5, s(6)), 'bold'); TX(INK);
-      pdf.text('www.skyxpress.site', warningCenterX, y + headerH / 2 + 4, { align: 'center' });
+      pdf.text('www.myskyxpress.com', warningCenterX, y + headerH / 2 + 4, { align: 'center' });
     } else if (opts.topRightMode === 'piece') {
       TF(Math.max(8, s(11)), 'bold'); TX(INK);
       pdf.text(`PIECE ${1}/${pieces}`, M + UW / 2, y + headerH / 2 + 1.5, { align: 'center' });
@@ -1322,7 +1322,7 @@ export const generateAirwayBillWithPayment = async (parcel: any, mode: OutputMod
     // label or overlap the grid box that follows.
     if (opts.showWebsite) {
       TF(Math.max(5.4, s(6.4)), 'bold'); TX(INK);
-      pdf.text('www.skyxpress.site', M + UW / 2, y + headerH + s(3.8), { align: 'center' });
+      pdf.text('www.myskyxpress.com', M + UW / 2, y + headerH + s(3.8), { align: 'center' });
     }
 
     y += headerH + s(1.5) + (opts.showWebsite ? s(5.4) : 0);
@@ -1436,7 +1436,7 @@ export const generateAirwayBillWithPayment = async (parcel: any, mode: OutputMod
     const labelW1 = pdf.getTextWidth('ACCOUNT NAME');
     TF(Math.max(5.6, s(6.4)), 'bold'); TX(INK);
     pdf.text(
-      safeText(parcel.created_by_name, 'www.skyxpress.site'),
+      safeText(parcel.created_by_name, 'www.myskyxpress.com'),
       labelX1 + labelW1 + s(2.2),
       ay
     );

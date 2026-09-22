@@ -255,7 +255,7 @@ export function createXrayEmailHtml(parcel: ParcelEmailData): string {
                         <td width="48%" style="background:#EFF6FF;border:1.5px solid #93C5FD;border-radius:12px;padding:16px 18px;vertical-align:top;">
                           <p style="margin:0 0 4px;font-size:10px;font-weight:700;color:#1E3A8A;letter-spacing:1.5px;text-transform:uppercase;">Tracking Number</p>
                           <p style="margin:0;font-size:16px;font-weight:800;color:#1D4ED8;letter-spacing:0.5px;word-break:break-all;">${tracking}</p>
-                          <p style="margin:4px 0 0;font-size:11px;color:#3B82F6;">🔍 Track on skyxpress.site</p>
+                          <p style="margin:4px 0 0;font-size:11px;color:#3B82F6;">🔍 Track on www.myskyxpress.com</p>
                         </td>
                       </tr>
                     </table>
@@ -350,7 +350,7 @@ export function createXrayEmailHtml(parcel: ParcelEmailData): string {
                     <table cellpadding="0" cellspacing="0">
                       <tr>
                         <td style="padding-right:24px;"><p style="margin:0;font-size:12px;color:#CBD5E1;">📧 SKYXPRESS786@GMAIL.COM</p></td>
-                        <td><p style="margin:0;font-size:12px;color:#CBD5E1;">🌐 skyxpress.site</p></td>
+                        <td><p style="margin:0;font-size:12px;color:#CBD5E1;">🌐 www.myskyxpress.com</p></td>
                       </tr>
                     </table>
                   </td>

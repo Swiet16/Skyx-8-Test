@@ -28,6 +28,7 @@ const Footer = () => {
               providing fast, reliable and secure express delivery services worldwide.
             </p>
             <div className="space-y-2 text-sm text-white">
+              <p>🌐 www.myskyxpress.com</p>
               <p>📧 skyxpress786@gmail.com</p>
               <p>📞 0326 9422411</p>
               <p>📞 0321 4710522</p>

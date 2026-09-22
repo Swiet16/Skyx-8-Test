@@ -115,7 +115,7 @@ interface ShippingLabelProps {
   countryMap?: Record<string, string>;
 }
 
-const WEBSITE = "www.skyxpress.site";
+const WEBSITE = "www.myskyxpress.com";
 
 export function ShippingLabel({ parcel, open, onClose, countryMap = {} }: ShippingLabelProps) {
   // ── Robust print positioning ──────────────────────────────────────────

@@ -70,7 +70,7 @@ export const InvoiceTemplate = ({ invoice, items }: InvoiceTemplateProps) => {
                 <p>LC 12345, United States</p>
                 <p>Email: info@skyxpress.com</p>
                 <p>Phone: +1 (555) 123-4567</p>
-                <p>Website: www.skyxpress.com</p>
+                <p>Website: www.myskyxpress.com</p>
               </div>
             </div>
             
@@ -177,7 +177,7 @@ export const InvoiceTemplate = ({ invoice, items }: InvoiceTemplateProps) => {
                   </span>
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  Track your shipment at: www.skyexpress.com/track
+                  Track your shipment at: www.myskyxpress.com/track
                 </p>
               </div>
             </div>
